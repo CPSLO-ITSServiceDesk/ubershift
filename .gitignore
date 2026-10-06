@@ -1,0 +1,13 @@
+# Environment variables / secrets 
+.env
+.env.*
+
+# Go build output 
+ubershift
+shift-coverage-bot
+
+#IDE
+.vscode/
+.idea/
+
+.msal_cache
