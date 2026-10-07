@@ -114,10 +114,6 @@ func main() {
 
 	log.Println("Microsoft authentication successful")
 
-	if err := getShifts(token); err != nil {
-		log.Fatal("Failed to get shifts", err)
-	}
-
 	botToken := os.Getenv("SLACK_BOT_TOKEN")
 	appToken := os.Getenv("SLACK_APP_TOKEN")
 
@@ -140,6 +136,36 @@ func main() {
 
 	client := socketmode.New(api)
 
+	shifts, err := getShifts(token)
+	if err != nil {
+		log.Fatal("Failed to get shifts", err)
+	}
+
+	if len(shifts) > 0 {
+		firstShift := shifts[0]
+		if firstShift.SharedShift != nil {
+
+			shiftText := fmt.Sprintf(
+				"*Shift available*\n%s - %s",
+				firstShift.SharedShift.StartDateTime,
+				firstShift.SharedShift.EndDateTime,
+			)
+			blocks := buildShiftBlocks(
+				shiftText,
+				firstShift.ID,
+			)
+			_, _, err = api.PostMessage(
+				"C0AP09MEL9Z",
+				slack.MsgOptionText("Shift available", false),
+				slack.MsgOptionBlocks(blocks...),
+			)
+			if err != nil {
+				log.Println("Failed to post real shift:", err)
+			}
+		}
+		log.Println("First real shift ID:", firstShift.ID)
+	}
+
 	go func() {
 		for evt := range client.Events {
 			switch evt.Type {
@@ -159,6 +185,25 @@ func main() {
 				}
 
 				if ev, ok := eventsAPIEvent.InnerEvent.Data.(*slackevents.AppMentionEvent); ok {
+					text := strings.ToLower(ev.Text)
+					if strings.Contains(text, "ping") {
+						api.PostMessage(
+							ev.Channel,
+							slack.MsgOptionText("pong", false),
+						)
+					}
+					if strings.Contains(text, "post") {
+						shiftText := "*Shift available*\n10:00 AM - 1:00 PM\nTest Shift"
+						requestID := "SHFT_0a7c358f-8449-4f04-8051-ef9fcd079604"
+
+						blocks := buildShiftBlocks(shiftText, requestID)
+
+						api.PostMessage(
+							ev.Channel,
+							slack.MsgOptionText("Shift available", false),
+							slack.MsgOptionBlocks(blocks...),
+						)
+					}
 					if strings.Contains(strings.ToLower(ev.Text), "ping") {
 						api.PostMessage(
 							ev.Channel,
@@ -168,6 +213,7 @@ func main() {
 				}
 
 			case socketmode.EventTypeInteractive:
+				log.Println("Interactive event received")
 				callback, ok := evt.Data.(slack.InteractionCallback)
 				if !ok {
 					client.Ack(*evt.Request)
@@ -183,7 +229,28 @@ func main() {
 
 					requestID := action.Value
 					userID := callback.User.ID
+					log.Println("Slack User ID:", userID)
 
+					msUser, err := resolvesSlackUserToMicrosoft(
+						api,
+						token,
+						userID,
+						getSlackUserEmail,
+						getMicrosoftUser,
+					)
+					if err != nil {
+						log.Println("Identity lookup failed:", err)
+						continue
+					}
+
+					err = assignShift(token, os.Getenv("MS_TEAM_ID"), requestID, msUser.ID)
+					if err != nil {
+						log.Println("Assign shift failed:", err)
+						continue
+					}
+
+					log.Println("Microsoft user:", msUser.DisplayName)
+					log.Println("Microsoft ID:", msUser.ID)
 					success, claimerID := store.Claim(
 						requestID,
 						userID,
