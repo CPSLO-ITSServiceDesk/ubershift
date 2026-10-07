@@ -2,15 +2,15 @@ package main
 
 import "encoding/json"
 import (
-	"io"
-	"os"
-	"fmt"
-	"log"
-	"time"
 	"context"
-	"net/url"
-	"net/http"
+	"fmt"
 	"github.com/slack-go/slack"
+	"io"
+	"log"
+	"net/http"
+	"net/url"
+	"os"
+	"time"
 
 	// "github.com/AzureAD/microsoft-authentication-library-for-go/apps/cache"
 	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/public"

@@ -1,14 +1,14 @@
 package main
 
 import (
-	"os"
+	"context"
+	"encoding/json"
 	"fmt"
 	"log"
-	"sort"
-	"context"
-	"strings"
 	"net/http"
-	"encoding/json"
+	"os"
+	"strings"
+	"sync"
 
 	"github.com/joho/godotenv"
 	"github.com/slack-go/slack"
@@ -136,7 +136,7 @@ func main() {
 
 	client := socketmode.New(api)
 
-		shifts, err := getShifts(token)
+	shifts, err := getShifts(token)
 	if err != nil {
 		log.Fatal("Failed to get shifts", err)
 	}
@@ -154,14 +154,14 @@ func main() {
 				shiftText,
 				firstShift.ID,
 			)
-		_, _, err = api.PostMessage(
-			"C0AP09MEL9Z",
-			slack.MsgOptionText("Shift available", false),
-			slack.MsgOptionBlocks(blocks...),
-		)
-		if err != nil {
-			log.Println("Failed to post real shift:", err)
-		}
+			_, _, err = api.PostMessage(
+				"C0AP09MEL9Z",
+				slack.MsgOptionText("Shift available", false),
+				slack.MsgOptionBlocks(blocks...),
+			)
+			if err != nil {
+				log.Println("Failed to post real shift:", err)
+			}
 		}
 		log.Println("First real shift ID:", firstShift.ID)
 	}
