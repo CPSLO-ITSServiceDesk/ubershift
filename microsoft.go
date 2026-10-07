@@ -2,14 +2,15 @@ package main
 
 import "encoding/json"
 import (
-	"context"
-	"fmt"
-	"github.com/slack-go/slack"
 	"io"
-	"net/http"
-	"net/url"
 	"os"
+	"fmt"
+	"log"
 	"time"
+	"context"
+	"net/url"
+	"net/http"
+	"github.com/slack-go/slack"
 
 	// "github.com/AzureAD/microsoft-authentication-library-for-go/apps/cache"
 	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/public"
@@ -49,6 +50,9 @@ type MicrosoftUser struct {
 	Mail              string `json:"mail"`
 	UserPrincipleName string `json:"userPrincipleName"`
 }
+
+type SlackEmailLookup func(*slack.Client, string) (string, error)
+type MicrosoftUserLookup func(string, string) (MicrosoftUser, error)
 
 // type TokenCache struct {
 // 	path string `json:"path"`
@@ -110,11 +114,11 @@ func getMicrosoftToken() (string, error) {
 	return result.AccessToken, nil
 }
 
-func getShifts(token string) error {
+func getShifts(token string) ([]Shift, error) {
 	teamID := os.Getenv("MS_TEAM_ID")
 
 	if teamID == "" {
-		return fmt.Errorf("MS_TEAM_ID not found")
+		return nil, fmt.Errorf("MS_TEAM_ID not found")
 	}
 
 	currentTime := time.Now()
@@ -134,7 +138,7 @@ func getShifts(token string) error {
 	finalURL := baseURL + "?" + params.Encode()
 	req, err := http.NewRequest("GET", finalURL, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -144,24 +148,25 @@ func getShifts(token string) error {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// turns raw JSON into a ShiftResponse
 	var shift_response ShiftResponse
 	err = json.Unmarshal(body, &shift_response)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	for _, shift := range shift_response.Value {
 		fmt.Println(shift.ID)
+		fmt.Println("Start:", shift.SharedShift.StartDateTime)
 
 		if shift.SharedShift != nil {
 
@@ -169,21 +174,21 @@ func getShifts(token string) error {
 				shift.SharedShift.StartDateTime,
 			)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			endTime, err := parseShiftTime(
 				shift.SharedShift.EndDateTime,
 			)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			pacificStartTime, err := convertToPacific(startTime)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			pacificEndTime, err := convertToPacific(endTime)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			fmt.Print(pacificStartTime)
 			fmt.Print(pacificEndTime)
@@ -192,7 +197,7 @@ func getShifts(token string) error {
 
 	fmt.Println("Graph status:", resp.Status)
 
-	return nil
+	return shift_response.Value, nil
 }
 
 /*
@@ -218,11 +223,16 @@ func getSlackUserEmail(api *slack.Client, slackUserID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	log.Println("Slack profile email: ", user.Profile.Email)
 	return user.Profile.Email, nil
 }
 
-func getMicrosoftUser(token string, userID string) (MicrosoftUser, error) {
-	url := "https://graph.microsoft.com/v1.0/users/" + userID
+// get Microsoft ID from a Shift
+// user, err := getMicrosoftUser(token, shift.UserId)
+// get Microsoft user from Cal Poly email from Slack
+// user, err := getMicrosoftUser(token, email)
+func getMicrosoftUser(token string, identifier string) (MicrosoftUser, error) {
+	url := "https://graph.microsoft.com/v1.0/users/" + identifier
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -236,6 +246,10 @@ func getMicrosoftUser(token string, userID string) (MicrosoftUser, error) {
 	resp, err := client.Do(req)
 	if err != nil {
 		return MicrosoftUser{}, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return MicrosoftUser{}, fmt.Errorf("Microsoft user lookup failed: %s", resp.Status)
 	}
 
 	defer resp.Body.Close()
@@ -257,37 +271,16 @@ func getMicrosoftUser(token string, userID string) (MicrosoftUser, error) {
 	return ms_user, nil
 }
 
-func getMicrosoftUserByEmail(token string, email string) (MicrosoftUser, error) {
-	url := "https://graph.microsoft.com/v1.0/users/" + email
-	req, err := http.NewRequest("GET", url, nil)
+func resolvesSlackUserToMicrosoft(api *slack.Client, token string, slackUserId string, getEmail SlackEmailLookup, getMSUser MicrosoftUserLookup) (MicrosoftUser, error) {
+	slack_email, err := getEmail(api, slackUserId)
+	log.Println("Slack email:", slack_email)
 	if err != nil {
 		return MicrosoftUser{}, err
 	}
-
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	ms_user, err := getMSUser(token, slack_email)
 	if err != nil {
 		return MicrosoftUser{}, err
 	}
-
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return MicrosoftUser{}, err
-	}
-
-	// turns raw JSON into a MicrosoftUser
-	var ms_user MicrosoftUser
-	err = json.Unmarshal(body, &ms_user)
-	if err != nil {
-		return MicrosoftUser{}, err
-	}
-
-	fmt.Println("Graph status:", resp.Status)
 
 	return ms_user, nil
 }
@@ -296,9 +289,17 @@ func getMicrosoftUserByEmail(token string, email string) (MicrosoftUser, error) 
 1. Microsft user ID + shiftiID
 2. update Slack meessage: claimed by @Kai
 */
-// func assignShift(token string, ms_teamID string, ms_shiftID string, ms_userID string) error {
-
-// }
+func assignShift(token string, teamID string, shiftID string, ms_userID string) error {
+	if os.Getenv("UBERSHIFT_DRY_RUN") == "true" {
+		log.Printf(
+			"DRY RUN: would assign shift %s to Microsoft user %s",
+			shiftID,
+			ms_userID,
+		)
+		return nil
+	}
+	return nil
+}
 
 // parses a formatted string and returns its corresponding time.Time
 func parseShiftTime(utcTime string) (time.Time, error) {
