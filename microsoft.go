@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"time"
+	"strings"
 
 	// "github.com/AzureAD/microsoft-authentication-library-for-go/apps/cache"
 	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/public"
@@ -121,11 +123,23 @@ func getShifts(token string) ([]Shift, error) {
 		return nil, fmt.Errorf("MS_TEAM_ID not found")
 	}
 
-	currentTime := time.Now()
-	utcTime := currentTime.UTC()
-	startDate := utcTime.Format(time.RFC3339)
+	pacificToday, err := convertToPacific(time.Now())
+	if err != nil {
+		return nil, err
+	}
+
+	midnight := time.Date(
+		pacificToday.Year(),
+		pacificToday.Month(),
+		pacificToday.Day(),
+		0, 0, 0, 0,
+		pacificToday.Location(),
+	)
+
+	startDate := midnight.UTC().Format(time.RFC3339)
 	filter := fmt.Sprintf(
-		"sharedShift/startDateTime ge %s", startDate,
+		"sharedShift/startDateTime ge %s",
+		startDate,
 	)
 
 	baseURL := "https://graph.microsoft.com/v1.0/teams/" +
@@ -164,40 +178,71 @@ func getShifts(token string) ([]Shift, error) {
 		return nil, err
 	}
 
+	var todaysShifts []Shift
 	for _, shift := range shift_response.Value {
-		fmt.Println(shift.ID)
-		fmt.Println("Start:", shift.SharedShift.StartDateTime)
+		if shift.SharedShift == nil {
+			continue
+		}
 
-		if shift.SharedShift != nil {
+		// 1. parse start time
+		startTime, err := parseShiftTime(shift.SharedShift.StartDateTime)
+		if err != nil {
+			continue
+		}
 
-			startTime, err := parseShiftTime(
-				shift.SharedShift.StartDateTime,
+		endTime, err := parseShiftTime(shift.SharedShift.EndDateTime)
+		if err != nil {
+			return nil, err
+		}
+
+		// 2. convert to pacific
+		pacificStartTime, err := convertToPacific(startTime)
+		if err != nil {
+			return nil, err
+		}
+
+		pacificEndTime, err := convertToPacific(endTime)
+		if err != nil {
+			return nil, err
+		}
+
+		// 3. get today's pacific date
+		pacificToday, err := convertToPacific(time.Now())
+		if err != nil {
+			return nil, err
+		}
+
+		// 4. check if the shift is today
+		if pacificStartTime.Year() == pacificToday.Year() &&
+			pacificStartTime.Month() == pacificToday.Month() &&
+			pacificStartTime.Day() == pacificToday.Day() {
+
+			todaysShifts = append(todaysShifts, shift)
+			fmt.Printf(
+				"Today's shift: %s | %s - %s\n",
+				shift.ID,
+				pacificStartTime.Format("3.04PM"),
+				pacificEndTime.Format("3.04PM"),
 			)
-			if err != nil {
-				return nil, err
-			}
-			endTime, err := parseShiftTime(
-				shift.SharedShift.EndDateTime,
-			)
-			if err != nil {
-				return nil, err
-			}
-			pacificStartTime, err := convertToPacific(startTime)
-			if err != nil {
-				return nil, err
-			}
-			pacificEndTime, err := convertToPacific(endTime)
-			if err != nil {
-				return nil, err
-			}
-			fmt.Print(pacificStartTime)
-			fmt.Print(pacificEndTime)
 		}
 	}
-
 	fmt.Println("Graph status:", resp.Status)
 
-	return shift_response.Value, nil
+	return todaysShifts, nil
+}
+
+func formatShiftTime(utcString string) (string, error) {
+	shiftTime, err := parseShiftTime(utcString)
+	if err != nil {
+		return "", err
+	}
+	pacificTime, err := convertToPacific(shiftTime)
+	if err != nil {
+		return "", err
+	}
+	formattedTime := pacificTime.Format("3:04")
+	formattedTime = strings.TrimSuffix(formattedTime, ":00")
+	return formattedTime, nil
 }
 
 /*
@@ -299,6 +344,13 @@ func assignShift(token string, teamID string, shiftID string, ms_userID string) 
 		return nil
 	}
 	return nil
+}
+
+func sortShiftsByStart(shifts []Shift) {
+	sort.Slice(shifts, func(i, j int) bool {
+		return shifts[i].SharedShift.StartDateTime <
+			shifts[j].SharedShift.StartDateTime
+	})
 }
 
 // parses a formatted string and returns its corresponding time.Time
