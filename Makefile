@@ -1,3 +1,5 @@
+dev:
+	air
 # run the software
 run:
 	go run .

@@ -171,9 +171,8 @@ func main() {
 			start,
 			end,
 		)
-		fmt.Println(scheduleText)
-
 	}
+	fmt.Println(scheduleText)
 
 	go func() {
 		for evt := range client.Events {
