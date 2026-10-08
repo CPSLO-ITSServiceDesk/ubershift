@@ -11,10 +11,9 @@ import (
 	"net/url"
 	"os"
 	"sort"
-	"time"
 	"strings"
+	"time"
 
-	// "github.com/AzureAD/microsoft-authentication-library-for-go/apps/cache"
 	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/public"
 )
 
@@ -56,10 +55,6 @@ type MicrosoftUser struct {
 type SlackEmailLookup func(*slack.Client, string) (string, error)
 type MicrosoftUserLookup func(string, string) (MicrosoftUser, error)
 
-// type TokenCache struct {
-// 	path string `json:"path"`
-// }
-
 func getMicrosoftToken() (string, error) {
 	clientid := os.Getenv("MS_CLIENT_ID")
 	tenantid := os.Getenv("MS_TENANT_ID")
@@ -73,6 +68,7 @@ func getMicrosoftToken() (string, error) {
 	app, err := public.New(
 		clientid,
 		public.WithAuthority(authority),
+		public.WithCache(&TokenCache{path: ".msal_cache"}),
 	)
 
 	if err != nil {
@@ -190,18 +186,8 @@ func getShifts(token string) ([]Shift, error) {
 			continue
 		}
 
-		endTime, err := parseShiftTime(shift.SharedShift.EndDateTime)
-		if err != nil {
-			return nil, err
-		}
-
 		// 2. convert to pacific
 		pacificStartTime, err := convertToPacific(startTime)
-		if err != nil {
-			return nil, err
-		}
-
-		pacificEndTime, err := convertToPacific(endTime)
 		if err != nil {
 			return nil, err
 		}
@@ -218,12 +204,6 @@ func getShifts(token string) ([]Shift, error) {
 			pacificStartTime.Day() == pacificToday.Day() {
 
 			todaysShifts = append(todaysShifts, shift)
-			fmt.Printf(
-				"Today's shift: %s | %s - %s\n",
-				shift.ID,
-				pacificStartTime.Format("3.04PM"),
-				pacificEndTime.Format("3.04PM"),
-			)
 		}
 	}
 	fmt.Println("Graph status:", resp.Status)
@@ -310,8 +290,6 @@ func getMicrosoftUser(token string, identifier string) (MicrosoftUser, error) {
 	if err != nil {
 		return MicrosoftUser{}, err
 	}
-
-	fmt.Println("Graph status:", resp.Status)
 
 	return ms_user, nil
 }
