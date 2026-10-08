@@ -141,29 +141,38 @@ func main() {
 		log.Fatal("Failed to get shifts", err)
 	}
 
-	if len(shifts) > 0 {
-		firstShift := shifts[0]
-		if firstShift.SharedShift != nil {
+	sortShiftsByStart(shifts)
 
-			shiftText := fmt.Sprintf(
-				"*Shift available*\n%s - %s",
-				firstShift.SharedShift.StartDateTime,
-				firstShift.SharedShift.EndDateTime,
-			)
-			blocks := buildShiftBlocks(
-				shiftText,
-				firstShift.ID,
-			)
-			_, _, err = api.PostMessage(
-				"C0AP09MEL9Z",
-				slack.MsgOptionText("Shift available", false),
-				slack.MsgOptionBlocks(blocks...),
-			)
-			if err != nil {
-				log.Println("Failed to post real shift:", err)
-			}
+	scheduleText := "*Today's Schedule*\n"
+	for _, shift := range shifts {
+		if shift.SharedShift == nil {
+			continue
 		}
-		log.Println("First real shift ID:", firstShift.ID)
+
+		msUser, err := getMicrosoftUser(token, shift.UserID)
+		if err != nil {
+			log.Println("User lookup failed:", err)
+			continue
+		}
+		start, err := formatShiftTime(shift.SharedShift.StartDateTime)
+		if err != nil {
+			continue
+		}
+		end, err := formatShiftTime(shift.SharedShift.EndDateTime)
+		if err != nil {
+			continue
+		}
+
+		firstName := strings.Fields(msUser.DisplayName)[0]
+
+		scheduleText += fmt.Sprintf(
+			"%s | %s - %s\n",
+			firstName,
+			start,
+			end,
+		)
+		fmt.Println(scheduleText)
+
 	}
 
 	go func() {
