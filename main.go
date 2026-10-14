@@ -112,8 +112,16 @@ func postDailySchedule(api *slack.Client, token string) error {
 	sortShiftsByStart(shifts)
 	scheduleText := "*Today's Schedule*\n"
 	for _, shift := range shifts {
-		if shift.SharedShift == nil {
+		if shift.SchedulingGroupID != os.Getenv("MS_SERVICE_DESK_GROUP_ID") {
 			continue
+		}
+		if shift.SharedShift == nil {
+			log.Printf(
+				"Shift: user=%s, start=%s, end=%s",
+				shift.UserID, 
+				shift.SharedShift.StartDateTime, 
+				shift.SharedShift.EndDateTime,
+			)
 		}
 
 		msUser, err := getMicrosoftUser(token, shift.UserID)
@@ -168,6 +176,9 @@ func main() {
 	}
 
 	log.Println("Microsoft authentication successful")
+	if err := getSchedulingGroups(token); err != nil {
+		log.Println("Failed to get scheduling groups: ", err)
+	}
 
 	botToken := os.Getenv("SLACK_BOT_TOKEN")
 	appToken := os.Getenv("SLACK_APP_TOKEN")

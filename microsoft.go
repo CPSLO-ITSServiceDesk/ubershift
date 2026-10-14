@@ -27,7 +27,6 @@ type Shift struct {
 	SchedulingGroupID string       `json:"schedulingGroupId"`
 	ID                string       `json:"id"`
 	SharedShift       *SharedShift `json:"sharedShift"`
-	SchedulingGroupID string '"json:"schedulingGroupID"'`
 }
 
 type SharedShift struct {
@@ -226,18 +225,6 @@ func formatShiftTime(utcString string) (string, error) {
 	return formattedTime, nil
 }
 
-/*
-	1. Receive Slack click
-	2. Identify who clicked
-	3. Map Slack user --> Microsoft user
-		Slack User --> slack user id --> get cal poly email --> xxx@calpoly.edu
-		--> Microsoft Graph lookup by email/UPN --> Microsoft user ID
-	4. Call assignShift()
-	5. If Graph succeeds:
-		update Slack message
-	6. If Graph fails:
-		show an error / leave shift unclaimed
-*/
 // func handleClaim() error {
 
 // }
@@ -349,4 +336,35 @@ func convertToPacific(utcTime time.Time) (time.Time, error) {
 	pacificTime := utcTime.In(location)
 
 	return pacificTime, nil
+}
+func getSchedulingGroups(token string) error {
+	teamID := os.Getenv("MS_TEAM_ID")
+
+	url := fmt.Sprintf(
+		"https://graph.microsoft.com/v1.0/teams/%s/schedule/schedulingGroups",
+		teamID,
+	)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("Graph API error: %s: %s", resp.Status, string(body))
+	}
+	return nil
 }
