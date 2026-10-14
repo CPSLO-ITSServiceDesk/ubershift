@@ -27,6 +27,7 @@ type Shift struct {
 	SchedulingGroupID string       `json:"schedulingGroupId"`
 	ID                string       `json:"id"`
 	SharedShift       *SharedShift `json:"sharedShift"`
+	SchedulingGroupID string '"json:"schedulingGroupID"'`
 }
 
 type SharedShift struct {
