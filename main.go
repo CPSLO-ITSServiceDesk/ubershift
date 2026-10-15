@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/slack-go/slack"
@@ -90,7 +91,7 @@ func startHTTPServer(api *slack.Client) {
 
 		_, _, err := api.PostMessage(
 			"C0AP09MEL9Z",
-			slack.MsgOptionText("Shift available", false),
+			slack.MsgOptionText(shiftText, false),
 			slack.MsgOptionBlocks(blocks...),
 		)
 		if err != nil {
@@ -98,21 +99,93 @@ func startHTTPServer(api *slack.Client) {
 			http.Error(w, "failed to post shift", http.StatusInternalServerError)
 			return
 		}
+		log.Println("schedule posted to slack")
 		w.WriteHeader(http.StatusOK)
 	})
 	go http.ListenAndServe(":8080", nil)
+}
+
+func postDailySchedule(api *slack.Client, token string) error {
+	shifts, err := getShifts(token)
+	if err != nil {
+		return err
+	}
+	sortShiftsByStart(shifts)
+	pacific, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		return err
+	}
+
+	day := time.Now().In(pacific).Weekday().String()
+	scheduleText := fmt.Sprintf("%s's Schedule \n\n", day)
+	for _, shift := range shifts {
+		if shift.SchedulingGroupID != os.Getenv("MS_SERVICE_DESK_GROUP_ID") {
+			continue
+		}
+		if shift.SharedShift == nil {
+			log.Printf(
+				"Shift: user=%s, start=%s, end=%s",
+				shift.UserID,
+				shift.SharedShift.StartDateTime,
+				shift.SharedShift.EndDateTime,
+			)
+		}
+
+		msUser, err := getMicrosoftUser(token, shift.UserID)
+		if err != nil {
+			log.Println("User lookup failed:", err)
+			continue
+		}
+		start, err := formatShiftTime(shift.SharedShift.StartDateTime)
+		if err != nil {
+			continue
+		}
+		end, err := formatShiftTime(shift.SharedShift.EndDateTime)
+		if err != nil {
+			continue
+		}
+
+		names := strings.Fields(msUser.DisplayName)
+		if len(names) == 0 {
+			continue
+		}
+
+		firstName := names[0]
+
+		scheduleText += fmt.Sprintf(
+			"%s %s-%s\n",
+			firstName,
+			start,
+			end,
+		)
+	}
+	_, _, err = api.PostMessage(
+		"C0AP09MEL9Z",
+		slack.MsgOptionText(scheduleText, false),
+	)
+
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, using existing environment variables")
 	}
+
+	log.Printf("Test schedule flag: %q", os.Getenv("UBERSHIFT_TEST_SCHEDULE"))
 	token, err := getMicrosoftToken()
 	if err != nil {
 		log.Fatal("Microsoft login failed:", err)
 	}
 
 	log.Println("Microsoft authentication successful")
+	if err := getSchedulingGroups(token); err != nil {
+		log.Println("Failed to get scheduling groups: ", err)
+	}
 
 	botToken := os.Getenv("SLACK_BOT_TOKEN")
 	appToken := os.Getenv("SLACK_APP_TOKEN")
@@ -135,44 +208,14 @@ func main() {
 	startHTTPServer(api)
 
 	client := socketmode.New(api)
+	if os.Getenv("UBERSHIFT_TEST_SCHEDULE") == "true" {
+		log.Println("Test: posting daily schedule")
 
-	shifts, err := getShifts(token)
-	if err != nil {
-		log.Fatal("Failed to get shifts", err)
+		if err := postDailySchedule(api, token); err != nil {
+			log.Println("Schedule test failed:", err)
+		}
 	}
-
-	sortShiftsByStart(shifts)
-
-	scheduleText := "*Today's Schedule*\n"
-	for _, shift := range shifts {
-		if shift.SharedShift == nil {
-			continue
-		}
-
-		msUser, err := getMicrosoftUser(token, shift.UserID)
-		if err != nil {
-			log.Println("User lookup failed:", err)
-			continue
-		}
-		start, err := formatShiftTime(shift.SharedShift.StartDateTime)
-		if err != nil {
-			continue
-		}
-		end, err := formatShiftTime(shift.SharedShift.EndDateTime)
-		if err != nil {
-			continue
-		}
-
-		firstName := strings.Fields(msUser.DisplayName)[0]
-
-		scheduleText += fmt.Sprintf(
-			"%s | %s - %s\n",
-			firstName,
-			start,
-			end,
-		)
-	}
-	fmt.Println(scheduleText)
+	go startDailyScheduler(api, token)
 
 	go func() {
 		for evt := range client.Events {
