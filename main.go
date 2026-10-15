@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/slack-go/slack"
@@ -110,7 +111,13 @@ func postDailySchedule(api *slack.Client, token string) error {
 		return err
 	}
 	sortShiftsByStart(shifts)
-	scheduleText := "*Today's Schedule*\n"
+	pacific, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		return err
+	}
+
+	day := time.Now().In(pacific).Weekday().String()
+	scheduleText := fmt.Sprintf("%s's Schedule \n\n", day)
 	for _, shift := range shifts {
 		if shift.SchedulingGroupID != os.Getenv("MS_SERVICE_DESK_GROUP_ID") {
 			continue
@@ -118,8 +125,8 @@ func postDailySchedule(api *slack.Client, token string) error {
 		if shift.SharedShift == nil {
 			log.Printf(
 				"Shift: user=%s, start=%s, end=%s",
-				shift.UserID, 
-				shift.SharedShift.StartDateTime, 
+				shift.UserID,
+				shift.SharedShift.StartDateTime,
 				shift.SharedShift.EndDateTime,
 			)
 		}
