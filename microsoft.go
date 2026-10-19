@@ -52,6 +52,15 @@ type MicrosoftUser struct {
 	UserPrincipleName string `json:"userPrincipleName"`
 }
 
+type OpenShift struct {
+	ID                string `json:"id"`
+	SchedulingGroupID string `json:"schedulingGroupId"`
+	SharedOpenShift   *struct {
+		StartDateTime string `json:"startDateTime"`
+		EndDateTime   string `json:"endDateTime"`
+	} `json:"sharedOpenShift"`
+}
+
 type SlackEmailLookup func(*slack.Client, string) (string, error)
 type MicrosoftUserLookup func(string, string) (MicrosoftUser, error)
 
@@ -367,4 +376,48 @@ func getSchedulingGroups(token string) error {
 		return fmt.Errorf("Graph API error: %s: %s", resp.Status, string(body))
 	}
 	return nil
+}
+
+func getOpenShifts(token string) ([]OpenShift, error) {
+	teamID := os.Getenv("MS_TEAM_ID")
+
+	url := fmt.Sprintf(
+		"https://graph.microsoft.com/v1.0/teams/%s/schedule/openShifts",
+		teamID,
+	)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Graph API returned %s", resp.Status)
+	}
+
+	var result struct {
+		Value []OpenShift `json:"value"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	var serviceDeskShifts []OpenShift
+
+	for _, shift := range result.Value {
+		if shift.SchedulingGroupID == os.Getenv("MS_SERVICE_DESK_GROUP_ID") {
+			serviceDeskShifts = append(serviceDeskShifts, shift)
+		}
+	}
+
+	return serviceDeskShifts, nil
 }

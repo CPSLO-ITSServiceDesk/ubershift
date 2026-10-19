@@ -11,3 +11,5 @@ shift-coverage-bot
 .idea/
 
 .msal_cache
+
+.daily_schedule.json
