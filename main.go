@@ -213,6 +213,16 @@ func main() {
 		log.Println("Failed to get scheduling groups: ", err)
 	}
 
+	timeOffOpenShifts, err := getTimeOffRequests(token)
+	if err != nil {
+		log.Println("Failed to get open shifts from time off requests:", err)
+	} else {
+		log.Printf("Found %d Service Desk open shifts", len(timeOffOpenShifts))
+	}
+	if err := getSchedulingGroups(token); err != nil {
+		log.Println("Failed to get scheduling groups: ", err)
+	}
+
 	botToken := os.Getenv("SLACK_BOT_TOKEN")
 	appToken := os.Getenv("SLACK_APP_TOKEN")
 

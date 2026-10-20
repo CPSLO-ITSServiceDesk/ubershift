@@ -61,6 +61,19 @@ type OpenShift struct {
 	} `json:"sharedOpenShift"`
 }
 
+type TimeOffRequest struct {
+	ID            string `json:"id"`
+	State         string `json:"state"`
+	SenderUserID  string `json:"senderUserId"`
+	StartDateTime string `json:"startDateTime"`
+	EndDateTime   string `json:"endDateTime"`
+}
+
+type TimeOffRequestResponse struct {
+	Value    []TimeOffRequest `json:"value"`
+	NextLink string           `json:"@odata.nextLink"`
+}
+
 type SlackEmailLookup func(*slack.Client, string) (string, error)
 type MicrosoftUserLookup func(string, string) (MicrosoftUser, error)
 
@@ -420,4 +433,41 @@ func getOpenShifts(token string) ([]OpenShift, error) {
 	}
 
 	return serviceDeskShifts, nil
+}
+
+// getTimeOffRequests retrieves time-off requests without changing Teams data.
+func getTimeOffRequests(token string) ([]TimeOffRequest, error) {
+	teamID := os.Getenv("MS_TEAM_ID")
+	if teamID == "" {
+		return nil, fmt.Errorf("MS_TEAM_ID not found")
+	}
+
+	requestURL := fmt.Sprintf(
+		"https://graph.microsoft.com/v1.0/teams/%s/schedule/timeOffRequests",
+		teamID,
+	)
+
+	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Graph API returned %s", resp.Status)
+	}
+
+	var result TimeOffRequestResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	return result.Value, nil
 }
