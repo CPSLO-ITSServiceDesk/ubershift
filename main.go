@@ -189,6 +189,17 @@ func buildDailyScheduleText(token string) (string, error) {
 		scheduleText += fmt.Sprintf("%s %s-%s\n", names[0], start, end)
 	}
 
+	scheduleText += "\n" + buildZoomHeader() + "\n"
+	employees := getAvailability(shifts)
+	zoom_slots := generateZoomSlots(time.Now().In(pacific))
+	assigned_shifts := assignZoomSlots(zoom_slots, employees, nil)
+	for _, slot := range assigned_shifts {
+		zoom_line, err := formatZoomSlot(token, slot)
+		if err != nil {
+			return "", err
+		}
+		scheduleText += zoom_line + "\n"
+	}
 	return scheduleText, nil
 }
 func main() {
