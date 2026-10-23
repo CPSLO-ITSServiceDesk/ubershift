@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
@@ -19,6 +20,13 @@ type EmployeeAvailability struct {
 	End    time.Time
 }
 
+var zoomLeadNames = map[string]bool{
+	"tyler peterson": true,
+	"kai":            true,
+	"edgar":          true,
+	"samuel":         true,
+}
+
 // returns true only if the student assistant's Service Desk
 // shift covers the entire proposed Zoom assignment
 func isAvailable(shiftStart, shiftEnd, zoomStart, zoomEnd time.Time) bool {
@@ -27,6 +35,7 @@ func isAvailable(shiftStart, shiftEnd, zoomStart, zoomEnd time.Time) bool {
 
 func getAvailability(shifts []Shift) []EmployeeAvailability {
 	var employees []EmployeeAvailability
+	excludedUserIDs := zoomExcludedUserIDs()
 
 	for _, shift := range shifts {
 		if shift.SharedShift == nil {
@@ -34,6 +43,10 @@ func getAvailability(shifts []Shift) []EmployeeAvailability {
 		}
 
 		if shift.SchedulingGroupID != os.Getenv("MS_SERVICE_DESK_GROUP_ID") {
+			continue
+		}
+
+		if excludedUserIDs[shift.UserID] {
 			continue
 		}
 
@@ -55,6 +68,61 @@ func getAvailability(shifts []Shift) []EmployeeAvailability {
 	}
 
 	return employees
+}
+
+// zoomExcludedUserIDs returns the Microsoft user IDs that must never receive
+// Zoom coverage, such as Service Desk leads.
+//
+// Set MS_ZOOM_EXCLUDED_USER_IDS in .env to a comma-separated list of IDs.
+func zoomExcludedUserIDs() map[string]bool {
+	excluded := make(map[string]bool)
+
+	for _, userID := range strings.Split(os.Getenv("MS_ZOOM_EXCLUDED_USER_IDS"), ",") {
+		userID = strings.TrimSpace(userID)
+		if userID != "" {
+			excluded[userID] = true
+		}
+	}
+
+	return excluded
+}
+
+// excludeZoomLeads removes known leads from Zoom candidates. Leads can still
+// appear in the Service Desk schedule; this only affects Zoom assignment.
+func excludeZoomLeads(
+	employees []EmployeeAvailability,
+	lookupUser func(string) (MicrosoftUser, error),
+) ([]EmployeeAvailability, error) {
+	filtered := make([]EmployeeAvailability, 0, len(employees))
+	leadByUserID := make(map[string]bool)
+
+	for _, employee := range employees {
+		isLead, known := leadByUserID[employee.UserID]
+		if !known {
+			user, err := lookupUser(employee.UserID)
+			if err != nil {
+				return nil, err
+			}
+			isLead = isZoomLeadName(user.DisplayName)
+			leadByUserID[employee.UserID] = isLead
+		}
+
+		if !isLead {
+			filtered = append(filtered, employee)
+		}
+	}
+
+	return filtered, nil
+}
+
+func isZoomLeadName(displayName string) bool {
+	name := strings.ToLower(strings.Join(strings.Fields(displayName), " "))
+	if zoomLeadNames[name] {
+		return true
+	}
+
+	nameParts := strings.Fields(name)
+	return len(nameParts) > 0 && zoomLeadNames[nameParts[0]]
 }
 
 func findAvailabilityEmployees(
@@ -114,10 +182,10 @@ func assignZoomSlots(
 
 	for i := 0; i < len(slots); i++ {
 		if shouldSplitZoomSlot(slots[i], employees, assignedTime) {
-			hourlySlots := splitZoomSlotIntoHours(slots[i])
-			updatedSlots := make([]ZoomShift, 0, len(slots)-1+len(hourlySlots))
+			splitSlots := splitZoomSlotAtAvailabilityBoundaries(slots[i], employees)
+			updatedSlots := make([]ZoomShift, 0, len(slots)-1+len(splitSlots))
 			updatedSlots = append(updatedSlots, slots[:i]...)
-			updatedSlots = append(updatedSlots, hourlySlots...)
+			updatedSlots = append(updatedSlots, splitSlots...)
 			updatedSlots = append(updatedSlots, slots[i+1:]...)
 			slots = updatedSlots
 			i--
@@ -178,16 +246,15 @@ func shouldSplitZoomSlot(
 	employees []EmployeeAvailability,
 	assignedTime map[string]time.Duration,
 ) bool {
-	if slot.End.Sub(slot.Start) <= time.Hour {
+	fullBlockCandidates := findAvailabilityEmployees(employees, slot.Start, slot.End)
+	splitSlots := splitZoomSlotAtAvailabilityBoundaries(slot, employees)
+	if len(splitSlots) <= 1 {
 		return false
 	}
 
-	fullBlockCandidates := findAvailabilityEmployees(employees, slot.Start, slot.End)
-	hourlySlots := splitZoomSlotIntoHours(slot)
-
 	if len(fullBlockCandidates) == 0 {
-		for _, hourlySlot := range hourlySlots {
-			if len(findAvailabilityEmployees(employees, hourlySlot.Start, hourlySlot.End)) > 0 {
+		for _, splitSlot := range splitSlots {
+			if len(findAvailabilityEmployees(employees, splitSlot.Start, splitSlot.End)) > 0 {
 				return true
 			}
 		}
@@ -205,9 +272,9 @@ func shouldSplitZoomSlot(
 		return false
 	}
 
-	for _, hourlySlot := range hourlySlots {
+	for _, splitSlot := range splitSlots {
 		hasLowerLoadedCandidate := false
-		for _, employee := range findAvailabilityEmployees(employees, hourlySlot.Start, hourlySlot.End) {
+		for _, employee := range findAvailabilityEmployees(employees, splitSlot.Start, splitSlot.End) {
 			if assignedTime[employee.UserID] < lowestFullBlockTime {
 				hasLowerLoadedCandidate = true
 				break
@@ -221,22 +288,37 @@ func shouldSplitZoomSlot(
 	return true
 }
 
-func splitZoomSlotIntoHours(slot ZoomShift) []ZoomShift {
-	var hourlySlots []ZoomShift
+func splitZoomSlotAtAvailabilityBoundaries(
+	slot ZoomShift,
+	employees []EmployeeAvailability,
+) []ZoomShift {
+	boundaries := []time.Time{slot.Start, slot.End}
 
-	for start := slot.Start; start.Before(slot.End); start = start.Add(time.Hour) {
-		end := start.Add(time.Hour)
-		if end.After(slot.End) {
-			end = slot.End
+	for _, employee := range employees {
+		if employee.Start.After(slot.Start) && employee.Start.Before(slot.End) {
+			boundaries = append(boundaries, employee.Start)
 		}
+		if employee.End.After(slot.Start) && employee.End.Before(slot.End) {
+			boundaries = append(boundaries, employee.End)
+		}
+	}
 
-		hourlySlots = append(hourlySlots, ZoomShift{
-			Start: start,
-			End:   end,
+	sort.Slice(boundaries, func(i, j int) bool {
+		return boundaries[i].Before(boundaries[j])
+	})
+
+	var splitSlots []ZoomShift
+	for i := 0; i < len(boundaries)-1; i++ {
+		if boundaries[i].Equal(boundaries[i+1]) {
+			continue
+		}
+		splitSlots = append(splitSlots, ZoomShift{
+			Start: boundaries[i],
+			End:   boundaries[i+1],
 		})
 	}
 
-	return hourlySlots
+	return splitSlots
 }
 
 func workedYesterday(
@@ -245,18 +327,27 @@ func workedYesterday(
 	end time.Time,
 	yesterday []ZoomShift,
 ) bool {
+	startMinute := start.Hour()*60 + start.Minute()
+	endMinute := end.Hour()*60 + end.Minute()
+
 	for _, shift := range yesterday {
 		if shift.UserID != userID {
 			continue
 		}
 
-		// compare clock times rather than dates.
-		if start.Hour() < shift.End.Hour() &&
-			end.Hour() > shift.Start.Hour() {
+		shiftStartMinute := shift.Start.Hour()*60 + shift.Start.Minute()
+		shiftEndMinute := shift.End.Hour()*60 + shift.End.Minute()
+
+		// Compare clock times rather than dates.
+		if startMinute < shiftEndMinute && endMinute > shiftStartMinute {
 			return true
 		}
 	}
 	return false
+}
+
+func isZoomCoverageDay(day time.Time) bool {
+	return day.Weekday() != time.Saturday && day.Weekday() != time.Sunday
 }
 
 func buildZoomHeader() string {

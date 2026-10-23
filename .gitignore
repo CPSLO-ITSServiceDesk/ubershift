@@ -13,3 +13,4 @@ shift-coverage-bot
 .msal_cache
 
 .daily_schedule.json
+.zoom_schedule_history.json

@@ -154,7 +154,8 @@ func buildDailyScheduleText(token string) (string, error) {
 		return "", err
 	}
 
-	day := time.Now().In(pacific).Weekday().String()
+	today := time.Now().In(pacific)
+	day := today.Weekday().String()
 	scheduleText := fmt.Sprintf("*%s's Schedule*\n\n", day)
 
 	for _, shift := range shifts {
@@ -189,16 +190,35 @@ func buildDailyScheduleText(token string) (string, error) {
 		scheduleText += fmt.Sprintf("%s %s-%s\n", names[0], start, end)
 	}
 
+	if !isZoomCoverageDay(today) {
+		return scheduleText, nil
+	}
+
 	scheduleText += "\n" + buildZoomHeader() + "\n"
 	employees := getAvailability(shifts)
-	zoom_slots := generateZoomSlots(time.Now().In(pacific))
-	assigned_shifts := assignZoomSlots(zoom_slots, employees, nil)
-	for _, slot := range assigned_shifts {
-		zoom_line, err := formatZoomSlot(token, slot)
+	employees, err = excludeZoomLeads(employees, func(userID string) (MicrosoftUser, error) {
+		return getMicrosoftUser(token, userID)
+	})
+	if err != nil {
+		return "", fmt.Errorf("exclude Zoom leads: %w", err)
+	}
+	previousZoomSlots, err := loadPreviousWorkdayZoomSlots(zoomScheduleHistoryPath, today)
+	if err != nil {
+		return "", err
+	}
+
+	zoomSlots := generateZoomSlots(today)
+	assignedSlots := assignZoomSlots(zoomSlots, employees, previousZoomSlots)
+	for _, slot := range assignedSlots {
+		zoomLine, err := formatZoomSlot(token, slot)
 		if err != nil {
 			return "", err
 		}
-		scheduleText += zoom_line + "\n"
+		scheduleText += zoomLine + "\n"
+	}
+
+	if err := saveZoomScheduleHistory(zoomScheduleHistoryPath, today, assignedSlots); err != nil {
+		return "", err
 	}
 	return scheduleText, nil
 }
