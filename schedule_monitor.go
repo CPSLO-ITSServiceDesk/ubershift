@@ -9,7 +9,7 @@ import (
 )
 
 func startScheduleMonitor(api *slack.Client, token string) {
-	ticker := time.NewTicker(15 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
@@ -71,11 +71,12 @@ func refreshDailySchedule(api *slack.Client, token string) error {
 	}
 
 	// only update Slack if the schedule changed
-	if messages[0].Text == scheduleText {
+	renderedText, blocks := dailyScheduleBlocks(scheduleText)
+	if messages[0].Text == renderedText {
 		log.Println("No schedule changes detected")
 		return nil
 	}
 
 	log.Println("Schedule change detected, updating Slack")
-	return updateDailySchedule(api, scheduleText)
+	return updateDailyScheduleWithBlocks(api, renderedText, blocks)
 }

@@ -41,16 +41,20 @@ func loadDailyScheduleMessage() (DailyScheduleMessage, error) {
 }
 
 func updateDailySchedule(api *slack.Client, scheduleText string) error {
+	return updateDailyScheduleWithBlocks(api, scheduleText, nil)
+}
+
+func updateDailyScheduleWithBlocks(api *slack.Client, scheduleText string, blocks []slack.Block) error {
 	message, err := loadDailyScheduleMessage()
 	if err != nil {
 		return err
 	}
 
-	_, _, _, err = api.UpdateMessage(
-		message.ChannelID,
-		message.Timestamp,
-		slack.MsgOptionText(scheduleText, false),
-	)
+	options := []slack.MsgOption{slack.MsgOptionText(scheduleText, false)}
+	if len(blocks) > 0 {
+		options = append(options, slack.MsgOptionBlocks(blocks...))
+	}
+	_, _, _, err = api.UpdateMessage(message.ChannelID, message.Timestamp, options...)
 	if err != nil {
 		return err
 	}

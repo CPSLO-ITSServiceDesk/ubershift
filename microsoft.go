@@ -447,27 +447,88 @@ func getTimeOffRequests(token string) ([]TimeOffRequest, error) {
 		teamID,
 	)
 
-	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
+	requests, err := getAllTimeOffRequests(http.DefaultClient, token, requestURL)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
+	return requests, nil
+}
+
+// timeOffRequestsForDay keeps only requests that overlap the calendar day of
+// the schedule being built. Graph sends request times in UTC; day uses Pacific
+// time because that is the schedule's display timezone.
+func timeOffRequestsForDay(requests []TimeOffRequest, day time.Time) ([]TimeOffRequest, error) {
+	dayStart := time.Date(
+		day.Year(), day.Month(), day.Day(),
+		0, 0, 0, 0,
+		day.Location(),
+	)
+	dayEnd := dayStart.AddDate(0, 0, 1)
+
+	var matching []TimeOffRequest
+	for _, request := range requests {
+		start, err := parseShiftTime(request.StartDateTime)
+		if err != nil {
+			return nil, fmt.Errorf("parse time-off request %s start: %w", request.ID, err)
+		}
+		end, err := parseShiftTime(request.EndDateTime)
+		if err != nil {
+			return nil, fmt.Errorf("parse time-off request %s end: %w", request.ID, err)
+		}
+
+		if start.Before(dayEnd) && end.After(dayStart) {
+			matching = append(matching, request)
+		}
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Graph API returned %s", resp.Status)
+	return matching, nil
+}
+
+type httpDoer interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
+func getAllTimeOffRequests(
+	client httpDoer,
+	token string,
+	requestURL string,
+) ([]TimeOffRequest, error) {
+	const maxPages = 100
+
+	var requests []TimeOffRequest
+	for page := 0; requestURL != ""; page++ {
+		if page == maxPages {
+			return nil, fmt.Errorf("time-off request pagination exceeded %d pages", maxPages)
+		}
+
+		req, err := http.NewRequest(http.MethodGet, requestURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return nil, fmt.Errorf("Graph API returned %s", resp.Status)
+		}
+
+		var result TimeOffRequestResponse
+		err = json.NewDecoder(resp.Body).Decode(&result)
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+
+		requests = append(requests, result.Value...)
+		requestURL = result.NextLink
 	}
 
-	var result TimeOffRequestResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-
-	return result.Value, nil
+	return requests, nil
 }

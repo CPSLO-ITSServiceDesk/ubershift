@@ -20,20 +20,16 @@ type EmployeeAvailability struct {
 	End    time.Time
 }
 
-var zoomLeadNames = map[string]bool{
-	"tyler peterson": true,
-	"kai":            true,
-	"edgar":          true,
-	"samuel":         true,
-}
-
 // returns true only if the student assistant's Service Desk
 // shift covers the entire proposed Zoom assignment
 func isAvailable(shiftStart, shiftEnd, zoomStart, zoomEnd time.Time) bool {
 	return !shiftStart.After(zoomStart) && !shiftEnd.Before(zoomEnd)
 }
 
-func getAvailability(shifts []Shift) []EmployeeAvailability {
+func getAvailability(
+	shifts []Shift,
+	timeOffRequests []TimeOffRequest,
+) ([]EmployeeAvailability, error) {
 	var employees []EmployeeAvailability
 	excludedUserIDs := zoomExcludedUserIDs()
 
@@ -60,17 +56,90 @@ func getAvailability(shifts []Shift) []EmployeeAvailability {
 			continue
 		}
 
-		employees = append(employees, EmployeeAvailability{
-			UserID: shift.UserID,
-			Start:  start,
-			End:    end,
-		})
+		availability, err := subtractApprovedTimeOff(
+			shift.UserID,
+			start,
+			end,
+			timeOffRequests,
+		)
+		if err != nil {
+			return nil, err
+		}
+		employees = append(employees, availability...)
 	}
 
-	return employees
+	return employees, nil
 }
 
-// zoomExcludedUserIDs returns the Microsoft user IDs that must never receive
+// subtractApprovedTimeOff splits a Service Desk shift into the time ranges
+// during which the employee is still available for Zoom coverage.
+func subtractApprovedTimeOff(
+	userID string,
+	shiftStart time.Time,
+	shiftEnd time.Time,
+	timeOffRequests []TimeOffRequest,
+) ([]EmployeeAvailability, error) {
+	available := []EmployeeAvailability{{
+		UserID: userID,
+		Start:  shiftStart,
+		End:    shiftEnd,
+	}}
+
+	for _, request := range timeOffRequests {
+		if request.SenderUserID != userID ||
+			!strings.EqualFold(request.State, "approved") {
+			continue
+		}
+
+		timeOffStart, err := parseShiftTime(request.StartDateTime)
+		if err != nil {
+			return nil, fmt.Errorf("parse approved time-off start: %w", err)
+		}
+		timeOffEnd, err := parseShiftTime(request.EndDateTime)
+		if err != nil {
+			return nil, fmt.Errorf("parse approved time-off end: %w", err)
+		}
+
+		var remaining []EmployeeAvailability
+		for _, window := range available {
+			// No overlap: preserve the complete availability window.
+			if !timeOffStart.Before(window.End) || !timeOffEnd.After(window.Start) {
+				remaining = append(remaining, window)
+				continue
+			}
+
+			if window.Start.Before(timeOffStart) {
+				remaining = append(remaining, EmployeeAvailability{
+					UserID: userID,
+					Start:  window.Start,
+					End:    timeOffStart,
+				})
+			}
+			if window.End.After(timeOffEnd) {
+				remaining = append(remaining, EmployeeAvailability{
+					UserID: userID,
+					Start:  timeOffEnd,
+					End:    window.End,
+				})
+			}
+		}
+		available = remaining
+	}
+
+	// Teams can return time-off boundaries with seconds. Do not display or
+	// assign a meaningless seconds-long availability fragment as "2-2".
+	const minimumAvailability = time.Minute
+	meaningful := available[:0]
+	for _, window := range available {
+		if window.End.Sub(window.Start) >= minimumAvailability {
+			meaningful = append(meaningful, window)
+		}
+	}
+
+	return meaningful, nil
+}
+
+// zoomExcludedUserIDs returns the Microsoft Object IDs that must never receive
 // Zoom coverage, such as Service Desk leads.
 //
 // Set MS_ZOOM_EXCLUDED_USER_IDS in .env to a comma-separated list of IDs.
@@ -86,45 +155,6 @@ func zoomExcludedUserIDs() map[string]bool {
 
 	return excluded
 }
-
-// excludeZoomLeads removes known leads from Zoom candidates. Leads can still
-// appear in the Service Desk schedule; this only affects Zoom assignment.
-func excludeZoomLeads(
-	employees []EmployeeAvailability,
-	lookupUser func(string) (MicrosoftUser, error),
-) ([]EmployeeAvailability, error) {
-	filtered := make([]EmployeeAvailability, 0, len(employees))
-	leadByUserID := make(map[string]bool)
-
-	for _, employee := range employees {
-		isLead, known := leadByUserID[employee.UserID]
-		if !known {
-			user, err := lookupUser(employee.UserID)
-			if err != nil {
-				return nil, err
-			}
-			isLead = isZoomLeadName(user.DisplayName)
-			leadByUserID[employee.UserID] = isLead
-		}
-
-		if !isLead {
-			filtered = append(filtered, employee)
-		}
-	}
-
-	return filtered, nil
-}
-
-func isZoomLeadName(displayName string) bool {
-	name := strings.ToLower(strings.Join(strings.Fields(displayName), " "))
-	if zoomLeadNames[name] {
-		return true
-	}
-
-	nameParts := strings.Fields(name)
-	return len(nameParts) > 0 && zoomLeadNames[nameParts[0]]
-}
-
 func findAvailabilityEmployees(
 	employees []EmployeeAvailability,
 	zoomStart time.Time,

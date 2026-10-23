@@ -7,7 +7,7 @@ import (
 	"github.com/slack-go/slack"
 )
 
-func eightAM() (time.Time, error) {
+func schedulePostTime() (time.Time, error) {
 	loc, err := time.LoadLocation("America/Los_Angeles")
 	if err != nil {
 		return time.Time{}, err
@@ -15,7 +15,7 @@ func eightAM() (time.Time, error) {
 	now := time.Now().In(loc)
 	pacific_time := time.Date(
 		now.Year(), now.Month(), now.Day(),
-		8, 0, 0, 0,
+		7, 30, 0, 0,
 		loc,
 	)
 	return pacific_time, nil
@@ -23,7 +23,7 @@ func eightAM() (time.Time, error) {
 
 func startDailyScheduler(api *slack.Client, token string) {
 	for {
-		next_run, err := eightAM()
+		next_run, err := schedulePostTime()
 		if err != nil {
 			return
 		}
@@ -36,7 +36,7 @@ func startDailyScheduler(api *slack.Client, token string) {
 		timer := time.NewTimer(wait_duration) // starts a countdown
 		defer timer.Stop()                    // timer.C
 		<-timer.C                             // pauses execution until signal arrives
-		fmt.Println("It's 8 AM Pacific! Time to post today's schedule.")
+		fmt.Println("It's 7:30 AM Pacific! Time to post today's schedule.")
 		err = postDailySchedule(api, token)
 		if err != nil {
 			fmt.Println("Failed to post daily schedule:", err)
