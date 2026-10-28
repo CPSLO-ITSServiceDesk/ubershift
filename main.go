@@ -48,7 +48,13 @@ func (s *ClaimStore) Claimer(requestID string) (string, bool) {
 const claimDailyOpenShiftActionID = "claim_daily_open_shift"
 
 func dailyOpenShiftID(line string) string {
-	return "daily-open-shift:" + line
+	pacific, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		return "daily-open-shift:" + line
+	}
+
+	date := time.Now().In(pacific).Format("2006-01-02")
+	return "daily-open-shift:" + date + ":" + line
 }
 
 func claimedDailyOpenShiftLine(line string, claimerID string) string {
@@ -445,6 +451,21 @@ func main() {
 		return
 	}
 
+	claimsDB, err := openClaimDB()
+	if err != nil {
+		log.Fatal("Open claims database fialed:", err)
+	}
+	defer claimsDB.Close()
+	savedClaims, err := loadClaims(claimsDB)
+	if err != nil {
+		log.Fatal("Load saved claims failed:", err)
+	}
+
+	for openShiftID, slackUserID := range savedClaims {
+		dailyOpenShiftClaims.Claim(openShiftID, slackUserID)
+	}
+
+	log.Printf("Restored %d saved claims", len(savedClaims))
 	store := NewClaimStore()
 
 	startHTTPServer(api)
@@ -529,6 +550,13 @@ func main() {
 
 				for _, action := range callback.ActionCallback.BlockActions {
 					if action.ActionID == claimDailyOpenShiftActionID {
+						if saved, err := saveClaims(claimsDB, action.Value, callback.User.ID); err != nil {
+							log.Println("Save daily open shift claim failed:", err)
+							continue
+						} else if !saved {
+							log.Println("Daily open shift was already claimed")
+							continue
+						}
 						success, claimerID := dailyOpenShiftClaims.Claim(action.Value, callback.User.ID)
 						if !success {
 							log.Printf("Daily open shift already claimed by %s", claimerID)
