@@ -173,7 +173,12 @@ func startHTTPServer(api *slack.Client) {
 }
 
 func postDailySchedule(api *slack.Client, token string) error {
-	scheduleText, err := buildDailyScheduleText(token)
+	scheduleDay, err := scheduleDayForPost()
+	if err != nil {
+		return err
+	}
+
+	scheduleText, err := buildDailyScheduleTextForDay(token, scheduleDay)
 	if err != nil {
 		return err
 	}
@@ -185,7 +190,8 @@ func postDailySchedule(api *slack.Client, token string) error {
 
 	renderedText, blocks := dailyScheduleBlocks(scheduleText)
 	saved, err := loadDailyScheduleMessage()
-	if err == nil && saved.Date == time.Now().In(pacific).Format("2006-01-02") {
+	scheduleDate := scheduleDay.In(pacific).Format("2006-01-02")
+	if err == nil && saved.Date == scheduleDate {
 		return updateDailyScheduleWithBlocks(api, renderedText, blocks)
 	}
 
@@ -199,7 +205,7 @@ func postDailySchedule(api *slack.Client, token string) error {
 	}
 
 	err = saveDailyScheduleMessage(DailyScheduleMessage{
-		Date:      time.Now().In(pacific).Format("2006-01-02"),
+		Date:      scheduleDate,
 		ChannelID: postedChannel,
 		Timestamp: timestamp,
 	})
@@ -211,7 +217,15 @@ func postDailySchedule(api *slack.Client, token string) error {
 }
 
 func buildDailyScheduleText(token string) (string, error) {
-	shifts, err := getShifts(token)
+	pacific, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		return "", err
+	}
+	return buildDailyScheduleTextForDay(token, time.Now().In(pacific))
+}
+
+func buildDailyScheduleTextForDay(token string, scheduleDay time.Time) (string, error) {
+	shifts, err := getShiftsForDay(token, scheduleDay)
 	if err != nil {
 		return "", err
 	}
@@ -223,18 +237,18 @@ func buildDailyScheduleText(token string) (string, error) {
 		return "", err
 	}
 
-	today := time.Now().In(pacific)
-	day := today.Weekday().String()
+	scheduleDay = scheduleDay.In(pacific)
+	day := scheduleDay.Weekday().String()
 	scheduleText := fmt.Sprintf("*%s's Schedule*\n\n", day)
 	timeOffRequests, err := getTimeOffRequests(token)
 	if err != nil {
 		return "", fmt.Errorf("get time-off requests: %w", err)
 	}
-	timeOffRequests, err = timeOffRequestsForDay(timeOffRequests, today)
+	timeOffRequests, err = timeOffRequestsForDay(timeOffRequests, scheduleDay)
 	if err != nil {
 		return "", fmt.Errorf("filter time-off requests for schedule day: %w", err)
 	}
-	log.Printf("Time-off requests for %s: %d", today.Format("2006-01-02"), len(timeOffRequests))
+	log.Printf("Time-off requests for %s: %d", scheduleDay.Format("2006-01-02"), len(timeOffRequests))
 	for _, request := range timeOffRequests {
 		log.Printf(
 			"Time-off request detected: id=%s state=%s userID=%s start=%s end=%s",
@@ -293,7 +307,7 @@ func buildDailyScheduleText(token string) (string, error) {
 		)
 	}
 
-	if !isZoomCoverageDay(today) {
+	if !isZoomCoverageDay(scheduleDay) {
 		return scheduleText, nil
 	}
 
@@ -302,12 +316,12 @@ func buildDailyScheduleText(token string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("build Zoom availability: %w", err)
 	}
-	previousZoomSlots, err := loadPreviousWorkdayZoomSlots(zoomScheduleHistoryPath, today)
+	previousZoomSlots, err := loadPreviousWorkdayZoomSlots(zoomScheduleHistoryPath, scheduleDay)
 	if err != nil {
 		return "", err
 	}
 
-	zoomSlots := generateZoomSlots(today)
+	zoomSlots := generateZoomSlots(scheduleDay)
 	assignedSlots := assignZoomSlots(zoomSlots, employees, previousZoomSlots)
 	for _, slot := range assignedSlots {
 		zoomLine, err := formatZoomSlot(token, slot)
@@ -317,7 +331,7 @@ func buildDailyScheduleText(token string) (string, error) {
 		scheduleText += zoomLine + "\n"
 	}
 
-	if err := saveZoomScheduleHistory(zoomScheduleHistoryPath, today, assignedSlots); err != nil {
+	if err := saveZoomScheduleHistory(zoomScheduleHistoryPath, scheduleDay, assignedSlots); err != nil {
 		return "", err
 	}
 	return scheduleText, nil
@@ -423,6 +437,13 @@ func main() {
 		botToken,
 		slack.OptionAppLevelToken(appToken),
 	)
+	if os.Getenv("UBERSHIFT_POST_ONCE") == "true" {
+		if err := postDailySchedule(api, token); err != nil {
+			log.Fatal("One-time schedule post failed:", err)
+		}
+		log.Println("One-time schedule post complete")
+		return
+	}
 
 	store := NewClaimStore()
 

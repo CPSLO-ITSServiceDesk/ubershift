@@ -135,23 +135,27 @@ func getMicrosoftToken() (string, error) {
 }
 
 func getShifts(token string) ([]Shift, error) {
+	return getShiftsForDay(token, time.Now())
+}
+
+func getShiftsForDay(token string, day time.Time) ([]Shift, error) {
 	teamID := os.Getenv("MS_TEAM_ID")
 
 	if teamID == "" {
 		return nil, fmt.Errorf("MS_TEAM_ID not found")
 	}
 
-	pacificToday, err := convertToPacific(time.Now())
+	pacificDay, err := convertToPacific(day)
 	if err != nil {
 		return nil, err
 	}
 
 	midnight := time.Date(
-		pacificToday.Year(),
-		pacificToday.Month(),
-		pacificToday.Day(),
+		pacificDay.Year(),
+		pacificDay.Month(),
+		pacificDay.Day(),
 		0, 0, 0, 0,
-		pacificToday.Location(),
+		pacificDay.Location(),
 	)
 
 	startDate := midnight.UTC().Format(time.RFC3339)
@@ -214,16 +218,10 @@ func getShifts(token string) ([]Shift, error) {
 			return nil, err
 		}
 
-		// 3. get today's pacific date
-		pacificToday, err := convertToPacific(time.Now())
-		if err != nil {
-			return nil, err
-		}
-
-		// 4. check if the shift is today
-		if pacificStartTime.Year() == pacificToday.Year() &&
-			pacificStartTime.Month() == pacificToday.Month() &&
-			pacificStartTime.Day() == pacificToday.Day() {
+		// Check if the shift starts on the requested Pacific calendar day.
+		if pacificStartTime.Year() == pacificDay.Year() &&
+			pacificStartTime.Month() == pacificDay.Month() &&
+			pacificStartTime.Day() == pacificDay.Day() {
 
 			todaysShifts = append(todaysShifts, shift)
 		}
