@@ -1,10 +1,9 @@
 package main
 
-import "encoding/json"
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"github.com/slack-go/slack"
 	"io"
 	"log"
 	"net/http"
@@ -14,7 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/confidential"
 	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/public"
+	"github.com/slack-go/slack"
 )
 
 // decoding Graph JSON - add JSON tag
@@ -80,12 +81,37 @@ type MicrosoftUserLookup func(string, string) (MicrosoftUser, error)
 func getMicrosoftToken() (string, error) {
 	clientid := os.Getenv("MS_CLIENT_ID")
 	tenantid := os.Getenv("MS_TENANT_ID")
+	clientSecret := os.Getenv("MS_CLIENT_SECRET")
 
 	if clientid == "" || tenantid == "" {
 		return "", fmt.Errorf("MS_CLIENT_ID or MS_TENANT_ID not found")
 	}
 
 	authority := "https://login.microsoftonline.com/" + tenantid
+	if clientSecret != "" {
+		credential, err := confidential.NewCredFromSecret(clientSecret)
+		if err != nil {
+			return "", fmt.Errorf("create Microsoft client-secret credential: %w", err)
+		}
+
+		app, err := confidential.New(
+			authority,
+			clientid,
+			credential,
+		)
+		if err != nil {
+			return "", fmt.Errorf("create Microsoft confidential client: %w", err)
+		}
+
+		result, err := app.AcquireTokenByCredential(
+			context.Background(),
+			[]string{"https://graph.microsoft.com/.default"},
+		)
+		if err != nil {
+			return "", fmt.Errorf("get Microsoft app token: %w", err)
+		}
+		return result.AccessToken, nil
+	}
 
 	app, err := public.New(
 		clientid,
