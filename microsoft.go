@@ -1,10 +1,9 @@
 package main
 
-import "encoding/json"
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"github.com/slack-go/slack"
 	"io"
 	"log"
 	"net/http"
@@ -14,7 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/confidential"
 	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/public"
+	"github.com/slack-go/slack"
 )
 
 // decoding Graph JSON - add JSON tag
@@ -61,18 +62,56 @@ type OpenShift struct {
 	} `json:"sharedOpenShift"`
 }
 
+type TimeOffRequest struct {
+	ID            string `json:"id"`
+	State         string `json:"state"`
+	SenderUserID  string `json:"senderUserId"`
+	StartDateTime string `json:"startDateTime"`
+	EndDateTime   string `json:"endDateTime"`
+}
+
+type TimeOffRequestResponse struct {
+	Value    []TimeOffRequest `json:"value"`
+	NextLink string           `json:"@odata.nextLink"`
+}
+
 type SlackEmailLookup func(*slack.Client, string) (string, error)
 type MicrosoftUserLookup func(string, string) (MicrosoftUser, error)
 
 func getMicrosoftToken() (string, error) {
 	clientid := os.Getenv("MS_CLIENT_ID")
 	tenantid := os.Getenv("MS_TENANT_ID")
+	clientSecret := os.Getenv("MS_CLIENT_SECRET")
 
 	if clientid == "" || tenantid == "" {
 		return "", fmt.Errorf("MS_CLIENT_ID or MS_TENANT_ID not found")
 	}
 
 	authority := "https://login.microsoftonline.com/" + tenantid
+	if clientSecret != "" {
+		credential, err := confidential.NewCredFromSecret(clientSecret)
+		if err != nil {
+			return "", fmt.Errorf("create Microsoft client-secret credential: %w", err)
+		}
+
+		app, err := confidential.New(
+			authority,
+			clientid,
+			credential,
+		)
+		if err != nil {
+			return "", fmt.Errorf("create Microsoft confidential client: %w", err)
+		}
+
+		result, err := app.AcquireTokenByCredential(
+			context.Background(),
+			[]string{"https://graph.microsoft.com/.default"},
+		)
+		if err != nil {
+			return "", fmt.Errorf("get Microsoft app token: %w", err)
+		}
+		return result.AccessToken, nil
+	}
 
 	app, err := public.New(
 		clientid,
@@ -122,23 +161,27 @@ func getMicrosoftToken() (string, error) {
 }
 
 func getShifts(token string) ([]Shift, error) {
+	return getShiftsForDay(token, time.Now())
+}
+
+func getShiftsForDay(token string, day time.Time) ([]Shift, error) {
 	teamID := os.Getenv("MS_TEAM_ID")
 
 	if teamID == "" {
 		return nil, fmt.Errorf("MS_TEAM_ID not found")
 	}
 
-	pacificToday, err := convertToPacific(time.Now())
+	pacificDay, err := convertToPacific(day)
 	if err != nil {
 		return nil, err
 	}
 
 	midnight := time.Date(
-		pacificToday.Year(),
-		pacificToday.Month(),
-		pacificToday.Day(),
+		pacificDay.Year(),
+		pacificDay.Month(),
+		pacificDay.Day(),
 		0, 0, 0, 0,
-		pacificToday.Location(),
+		pacificDay.Location(),
 	)
 
 	startDate := midnight.UTC().Format(time.RFC3339)
@@ -201,16 +244,10 @@ func getShifts(token string) ([]Shift, error) {
 			return nil, err
 		}
 
-		// 3. get today's pacific date
-		pacificToday, err := convertToPacific(time.Now())
-		if err != nil {
-			return nil, err
-		}
-
-		// 4. check if the shift is today
-		if pacificStartTime.Year() == pacificToday.Year() &&
-			pacificStartTime.Month() == pacificToday.Month() &&
-			pacificStartTime.Day() == pacificToday.Day() {
+		// Check if the shift starts on the requested Pacific calendar day.
+		if pacificStartTime.Year() == pacificDay.Year() &&
+			pacificStartTime.Month() == pacificDay.Month() &&
+			pacificStartTime.Day() == pacificDay.Day() {
 
 			todaysShifts = append(todaysShifts, shift)
 		}
@@ -420,4 +457,102 @@ func getOpenShifts(token string) ([]OpenShift, error) {
 	}
 
 	return serviceDeskShifts, nil
+}
+
+// getTimeOffRequests retrieves time-off requests without changing Teams data.
+func getTimeOffRequests(token string) ([]TimeOffRequest, error) {
+	teamID := os.Getenv("MS_TEAM_ID")
+	if teamID == "" {
+		return nil, fmt.Errorf("MS_TEAM_ID not found")
+	}
+
+	requestURL := fmt.Sprintf(
+		"https://graph.microsoft.com/v1.0/teams/%s/schedule/timeOffRequests",
+		teamID,
+	)
+
+	requests, err := getAllTimeOffRequests(http.DefaultClient, token, requestURL)
+	if err != nil {
+		return nil, err
+	}
+
+	return requests, nil
+}
+
+// timeOffRequestsForDay keeps only requests that overlap the calendar day of
+// the schedule being built. Graph sends request times in UTC; day uses Pacific
+// time because that is the schedule's display timezone.
+func timeOffRequestsForDay(requests []TimeOffRequest, day time.Time) ([]TimeOffRequest, error) {
+	dayStart := time.Date(
+		day.Year(), day.Month(), day.Day(),
+		0, 0, 0, 0,
+		day.Location(),
+	)
+	dayEnd := dayStart.AddDate(0, 0, 1)
+
+	var matching []TimeOffRequest
+	for _, request := range requests {
+		start, err := parseShiftTime(request.StartDateTime)
+		if err != nil {
+			return nil, fmt.Errorf("parse time-off request %s start: %w", request.ID, err)
+		}
+		end, err := parseShiftTime(request.EndDateTime)
+		if err != nil {
+			return nil, fmt.Errorf("parse time-off request %s end: %w", request.ID, err)
+		}
+
+		if start.Before(dayEnd) && end.After(dayStart) {
+			matching = append(matching, request)
+		}
+	}
+
+	return matching, nil
+}
+
+type httpDoer interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
+func getAllTimeOffRequests(
+	client httpDoer,
+	token string,
+	requestURL string,
+) ([]TimeOffRequest, error) {
+	const maxPages = 100
+
+	var requests []TimeOffRequest
+	for page := 0; requestURL != ""; page++ {
+		if page == maxPages {
+			return nil, fmt.Errorf("time-off request pagination exceeded %d pages", maxPages)
+		}
+
+		req, err := http.NewRequest(http.MethodGet, requestURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return nil, fmt.Errorf("Graph API returned %s", resp.Status)
+		}
+
+		var result TimeOffRequestResponse
+		err = json.NewDecoder(resp.Body).Decode(&result)
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+
+		requests = append(requests, result.Value...)
+		requestURL = result.NextLink
+	}
+
+	return requests, nil
 }
