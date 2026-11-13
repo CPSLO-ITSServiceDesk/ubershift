@@ -1,10 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"time"
+
+	autoshift "shift-coverage-bot"
 )
 
 func main() {
@@ -14,8 +18,36 @@ func main() {
 	}
 
 	http.HandleFunc("/", Handler)
+	http.HandleFunc("/api/preview", previewHandler)
 	log.Printf("AutoShift admin website listening on port %s", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
+}
+
+func previewHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	date, err := time.ParseInLocation("2006-01-02", r.FormValue("date"), time.Local)
+	if err != nil {
+		http.Error(w, "date must use YYYY-MM-DD", http.StatusBadRequest)
+		return
+	}
+	token, err := autoshift.GetMicrosoftToken()
+	if err != nil {
+		http.Error(w, "Microsoft authentication failed", http.StatusBadGateway)
+		return
+	}
+	text, err := autoshift.BuildDailyScheduleTextForDay(token, date)
+	if err != nil {
+		log.Printf("generate schedule preview: %v", err)
+		http.Error(w, "schedule preview failed", http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"date": date.Format("2006-01-02"), "text": text})
 }
 
 // Handler serves the public, read-only AutoShift status page on Vercel.

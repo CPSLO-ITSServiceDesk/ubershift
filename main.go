@@ -321,9 +321,12 @@ func BuildDailyScheduleTextForDay(token string, scheduleDay time.Time) (string, 
 	if err != nil {
 		return "", fmt.Errorf("build Zoom availability: %w", err)
 	}
-	previousZoomSlots, err := loadPreviousWorkdayZoomSlots(zoomScheduleHistoryPath, scheduleDay)
-	if err != nil {
-		return "", err
+	var previousZoomSlots []ZoomShift
+	if os.Getenv("UBERSHIFT_DISABLE_ZOOM_HISTORY") != "true" {
+		previousZoomSlots, err = loadPreviousWorkdayZoomSlots(zoomScheduleHistoryPath, scheduleDay)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	zoomSlots := generateZoomSlots(scheduleDay)
@@ -336,8 +339,10 @@ func BuildDailyScheduleTextForDay(token string, scheduleDay time.Time) (string, 
 		scheduleText += zoomLine + "\n"
 	}
 
-	if err := saveZoomScheduleHistory(zoomScheduleHistoryPath, scheduleDay, assignedSlots); err != nil {
-		return "", err
+	if os.Getenv("UBERSHIFT_DISABLE_ZOOM_HISTORY") != "true" {
+		if err := saveZoomScheduleHistory(zoomScheduleHistoryPath, scheduleDay, assignedSlots); err != nil {
+			return "", err
+		}
 	}
 	return scheduleText, nil
 }
@@ -409,7 +414,7 @@ func Run() {
 	}
 
 	log.Printf("Test schedule flag: %q", os.Getenv("UBERSHIFT_TEST_SCHEDULE"))
-	token, err := getMicrosoftToken()
+	token, err := GetMicrosoftToken()
 	if err != nil {
 		log.Fatal("Microsoft login failed:", err)
 	}

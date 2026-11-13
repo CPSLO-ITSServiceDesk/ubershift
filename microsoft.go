@@ -78,7 +78,8 @@ type TimeOffRequestResponse struct {
 type SlackEmailLookup func(*slack.Client, string) (string, error)
 type MicrosoftUserLookup func(string, string) (MicrosoftUser, error)
 
-func getMicrosoftToken() (string, error) {
+// GetMicrosoftToken obtains a Microsoft Graph token for the bot or web preview.
+func GetMicrosoftToken() (string, error) {
 	clientid := os.Getenv("MS_CLIENT_ID")
 	tenantid := os.Getenv("MS_TENANT_ID")
 	clientSecret := os.Getenv("MS_CLIENT_SECRET")
