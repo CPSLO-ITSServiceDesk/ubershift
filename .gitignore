@@ -5,6 +5,9 @@
 # Go build output 
 ubershift
 shift-coverage-bot
+# Local macOS build artifact for the retired web prototype. Vercel runs Linux,
+# so this must never be deployed as an executable.
+web/autoshift-web
 
 #IDE
 .vscode/
