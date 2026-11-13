@@ -1,4 +1,4 @@
-package main
+package autoshift
 
 import (
 	"context"
@@ -176,7 +176,7 @@ func postDailySchedule(api *slack.Client, token string) error {
 		return err
 	}
 
-	scheduleText, err := buildDailyScheduleTextForDay(token, scheduleDay)
+	scheduleText, err := BuildDailyScheduleTextForDay(token, scheduleDay)
 	if err != nil {
 		return err
 	}
@@ -224,10 +224,12 @@ func buildDailyScheduleText(token string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return buildDailyScheduleTextForDay(token, time.Now().In(pacific))
+	return BuildDailyScheduleTextForDay(token, time.Now().In(pacific))
 }
 
-func buildDailyScheduleTextForDay(token string, scheduleDay time.Time) (string, error) {
+// BuildDailyScheduleTextForDay reads Teams schedules and approved time off to
+// construct the Slack-ready schedule for one Pacific-time workday.
+func BuildDailyScheduleTextForDay(token string, scheduleDay time.Time) (string, error) {
 	shifts, err := getShiftsForDay(token, scheduleDay)
 	if err != nil {
 		return "", err
@@ -399,7 +401,9 @@ func formatServiceDeskAvailability(
 
 	return scheduleLine
 }
-func main() {
+
+// Run starts the persistent Slack and Microsoft Teams monitor.
+func Run() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, using existing environment variables")
 	}

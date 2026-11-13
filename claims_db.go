@@ -1,4 +1,4 @@
-package main
+package autoshift
 
 import (
 	"database/sql"
