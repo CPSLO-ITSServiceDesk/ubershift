@@ -1,27 +1,14 @@
-package main
+package handler
 
 import (
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"time"
 
 	autoshift "shift-coverage-bot"
 )
-
-func main() {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "3000"
-	}
-
-	http.HandleFunc("/", Handler)
-	http.HandleFunc("/api/preview", previewHandler)
-	log.Printf("AutoShift admin website listening on port %s", port)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
-}
 
 func previewHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -54,6 +41,10 @@ func previewHandler(w http.ResponseWriter, r *http.Request) {
 // Posting and claim-management endpoints will require authentication before they
 // are added.
 func Handler(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("action") == "preview" {
+		previewHandler(w, r)
+		return
+	}
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
