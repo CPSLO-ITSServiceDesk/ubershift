@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	autoshift "shift-coverage-bot/internal/autoshift"
+	autoshift "shift-coverage-bot/autoshift"
 )
 
 func previewHandler(w http.ResponseWriter, r *http.Request) {
