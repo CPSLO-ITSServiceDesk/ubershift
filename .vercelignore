@@ -1,0 +1,8 @@
+# Vercel serves the short-lived admin HTTP function only. The root Go program
+# is the persistent Slack/Teams worker and must never be started in a
+# serverless function.
+/*
+!api
+!go.mod
+!go.sum
+!vercel.json
