@@ -170,7 +170,7 @@ func TestFormatServiceDeskAvailabilityShowsOpenShiftWhenFullyUnavailable(t *test
 	shiftEnd := time.Date(2026, 10, 23, 19, 0, 0, 0, time.UTC)
 
 	got := formatServiceDeskAvailability("Kai", shiftStart, shiftEnd, nil, pacific)
-	want := "Kai 10-12 --> Open Shift\n"
+	want := "~Kai 10-12~ --> Open Shift\n"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -22,7 +23,10 @@ type ClaimStore struct {
 	claimed map[string]string // requestID -> userID
 }
 
-var dailyOpenShiftClaims = NewClaimStore()
+var (
+	dailyOpenShiftClaims = NewClaimStore()
+	dailyClaimsDB        *sql.DB
+)
 
 func NewClaimStore() *ClaimStore {
 	return &ClaimStore{claimed: make(map[string]string)}
@@ -62,7 +66,7 @@ func claimedDailyOpenShiftLine(line string, claimerID string) string {
 	if len(parts) != 2 {
 		return line
 	}
-	fields := strings.Fields(parts[0])
+	fields := strings.Fields(strings.ReplaceAll(parts[0], "~", ""))
 	if len(fields) < 2 {
 		return line
 	}
@@ -71,42 +75,11 @@ func claimedDailyOpenShiftLine(line string, claimerID string) string {
 
 func openShiftButtonLabel(line string) string {
 	parts := strings.SplitN(line, " --> Open Shift", 2)
-	return "Claim " + parts[0]
+	return "Claim " + strings.ReplaceAll(parts[0], "~", "")
 }
 
 func dailyScheduleBlocks(scheduleText string) (string, []slack.Block) {
-	lines := strings.Split(strings.TrimSuffix(scheduleText, "\n"), "\n")
-	renderedLines := make([]string, 0, len(lines))
-	var openLines []string
-	for _, line := range lines {
-		if !strings.Contains(line, " --> Open Shift") {
-			renderedLines = append(renderedLines, line)
-			continue
-		}
-		requestID := dailyOpenShiftID(line)
-		if claimerID, ok := dailyOpenShiftClaims.Claimer(requestID); ok {
-			renderedLines = append(renderedLines, claimedDailyOpenShiftLine(line, claimerID))
-			continue
-		}
-		renderedLines = append(renderedLines, line)
-		openLines = append(openLines, line)
-	}
-
-	renderedText := strings.Join(renderedLines, "\n") + "\n"
-	blocks := []slack.Block{slack.NewSectionBlock(
-		slack.NewTextBlockObject("mrkdwn", renderedText, false, false), nil, nil,
-	)}
-	for _, line := range openLines {
-		blocks = append(blocks, slack.NewActionBlock(
-			dailyOpenShiftID(line),
-			slack.NewButtonBlockElement(
-				claimDailyOpenShiftActionID,
-				dailyOpenShiftID(line),
-				slack.NewTextBlockObject("plain_text", openShiftButtonLabel(line), false, false),
-			).WithStyle(slack.StylePrimary),
-		))
-	}
-	return renderedText, blocks
+	return dailyScheduleBlocksWithPortionClaims(scheduleText, dailyClaimsDB)
 }
 
 type ShiftRequest struct {
@@ -198,7 +171,11 @@ func postDailySchedule(api *slack.Client, token string) error {
 	saved, err := loadDailyScheduleMessage()
 	scheduleDate := scheduleDay.In(pacific).Format("2006-01-02")
 	if err == nil && saved.Date == scheduleDate {
-		return updateDailyScheduleWithBlocks(api, renderedText, blocks)
+		if err := updateDailyScheduleWithBlocks(api, renderedText, blocks); err != nil {
+			return err
+		}
+		saved.SourceText = scheduleText
+		return saveDailyScheduleMessage(saved)
 	}
 
 	postedChannel, timestamp, err := api.PostMessage(
@@ -211,9 +188,10 @@ func postDailySchedule(api *slack.Client, token string) error {
 	}
 
 	err = saveDailyScheduleMessage(DailyScheduleMessage{
-		Date:      scheduleDate,
-		ChannelID: postedChannel,
-		Timestamp: timestamp,
+		Date:       scheduleDate,
+		ChannelID:  postedChannel,
+		Timestamp:  timestamp,
+		SourceText: scheduleText,
 	})
 	if err != nil {
 		return err
@@ -364,7 +342,7 @@ func formatServiceDeskAvailability(
 	}
 
 	if len(availability) == 0 {
-		return fmt.Sprintf("%s %s --> Open Shift\n", firstName, originalRange)
+		return fmt.Sprintf("~%s %s~ --> Open Shift\n", firstName, originalRange)
 	}
 
 	availableRanges := make([]string, 0, len(availability))
@@ -443,6 +421,12 @@ func main() {
 		botToken,
 		slack.OptionAppLevelToken(appToken),
 	)
+	claimsDB, err := openClaimDB()
+	if err != nil {
+		log.Fatal("Open claims database failed:", err)
+	}
+	defer claimsDB.Close()
+	dailyClaimsDB = claimsDB
 	if os.Getenv("UBERSHIFT_POST_ONCE") == "true" {
 		if err := postDailySchedule(api, token); err != nil {
 			log.Fatal("One-time schedule post failed:", err)
@@ -451,11 +435,6 @@ func main() {
 		return
 	}
 
-	claimsDB, err := openClaimDB()
-	if err != nil {
-		log.Fatal("Open claims database fialed:", err)
-	}
-	defer claimsDB.Close()
 	savedClaims, err := loadClaims(claimsDB)
 	if err != nil {
 		log.Fatal("Load saved claims failed:", err)
@@ -546,38 +525,44 @@ func main() {
 					continue
 				}
 
+				if callback.Type == slack.InteractionTypeViewSubmission &&
+					callback.View.CallbackID == portionClaimModalCallbackID {
+					claimed, response, err := saveSubmittedPortionClaim(claimsDB, callback)
+					client.Ack(*evt.Request, response)
+					if err != nil {
+						log.Println("Save portion claim failed:", err)
+						continue
+					}
+					if claimed {
+						if err := updateDailyScheduleFromStoredSource(api); err != nil {
+							log.Println("Fast claim update failed; refreshing from Teams:", err)
+							if err := refreshDailySchedule(api, token); err != nil {
+								log.Println("Refresh after portion claim failed:", err)
+							}
+						}
+					}
+					continue
+				}
+
 				client.Ack(*evt.Request)
+				if callback.Type != slack.InteractionTypeBlockActions {
+					continue
+				}
 
 				for _, action := range callback.ActionCallback.BlockActions {
 					if action.ActionID == claimDailyOpenShiftActionID {
-						if saved, err := saveClaims(claimsDB, action.Value, callback.User.ID); err != nil {
-							log.Println("Save daily open shift claim failed:", err)
-							continue
-						} else if !saved {
-							log.Println("Daily open shift was already claimed")
+						var request portionClaimRequest
+						if err := json.Unmarshal([]byte(action.Value), &request); err != nil {
+							log.Println("Read portion claim request failed:", err)
 							continue
 						}
-						success, claimerID := dailyOpenShiftClaims.Claim(action.Value, callback.User.ID)
-						if !success {
-							log.Printf("Daily open shift already claimed by %s", claimerID)
-							continue
-						}
-						if len(callback.Message.Blocks.BlockSet) == 0 {
-							continue
-						}
-						section, ok := callback.Message.Blocks.BlockSet[0].(*slack.SectionBlock)
-						if !ok || section.Text == nil {
-							continue
-						}
-						renderedText, blocks := dailyScheduleBlocks(section.Text.Text)
-						_, _, _, err := api.UpdateMessage(
-							callback.Channel.ID,
-							callback.Message.Timestamp,
-							slack.MsgOptionText(renderedText, false),
-							slack.MsgOptionBlocks(blocks...),
-						)
+						modal, err := portionClaimModal(request)
 						if err != nil {
-							log.Println("Update daily open shift claim failed:", err)
+							log.Println("Build portion claim modal failed:", err)
+							continue
+						}
+						if _, err := api.OpenView(callback.TriggerID, modal); err != nil {
+							log.Println("Open portion claim modal failed:", err)
 						}
 						continue
 					}

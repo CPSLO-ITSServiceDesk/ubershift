@@ -74,9 +74,17 @@ func refreshDailySchedule(api *slack.Client, token string) error {
 	renderedText, blocks := dailyScheduleBlocks(scheduleText)
 	if messages[0].Text == renderedText {
 		log.Println("No schedule changes detected")
+		if saved.SourceText != scheduleText {
+			saved.SourceText = scheduleText
+			return saveDailyScheduleMessage(saved)
+		}
 		return nil
 	}
 
 	log.Println("Schedule change detected, updating Slack")
-	return updateDailyScheduleWithBlocks(api, renderedText, blocks)
+	if err := updateDailyScheduleWithBlocks(api, renderedText, blocks); err != nil {
+		return err
+	}
+	saved.SourceText = scheduleText
+	return saveDailyScheduleMessage(saved)
 }
