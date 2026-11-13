@@ -1,11 +1,23 @@
-package handler
+package main
 
 import (
 	"crypto/subtle"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 )
+
+func main() {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "3000"
+	}
+
+	http.HandleFunc("/", Handler)
+	log.Printf("AutoShift admin website listening on port %s", port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
+}
 
 // Handler serves the private AutoShift administrator landing page on Vercel.
 // Schedule posting and claim management are added as separate authenticated API
