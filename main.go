@@ -51,6 +51,14 @@ func (s *ClaimStore) Claimer(requestID string) (string, bool) {
 
 const claimDailyOpenShiftActionID = "claim_daily_open_shift"
 
+func scheduleChannelID() (string, error) {
+	channelID := os.Getenv("SLACK_TEST_CHANNEL_ID")
+	if channelID == "" {
+		return "", fmt.Errorf("SLACK_TEST_CHANNEL_ID is not set")
+	}
+	return channelID, nil
+}
+
 func dailyOpenShiftID(line string) string {
 	pacific, err := time.LoadLocation("America/Los_Angeles")
 	if err != nil {
@@ -125,6 +133,12 @@ func claimedBlocks(shiftText string, success bool, existingUserID, claimantUserI
 
 func startHTTPServer(api *slack.Client) {
 	http.HandleFunc("/new-shift", func(w http.ResponseWriter, r *http.Request) {
+		channelID, err := scheduleChannelID()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
 		var req ShiftRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -135,8 +149,8 @@ func startHTTPServer(api *slack.Client) {
 		shiftText := fmt.Sprintf("*Shift available*\n%s - %s\n%s", req.Start, req.End, req.Role)
 		blocks := buildShiftBlocks(shiftText, requestID)
 
-		_, _, err := api.PostMessage(
-			"C0AP09MEL9Z",
+		_, _, err = api.PostMessage(
+			channelID,
 			slack.MsgOptionText(shiftText, false),
 			slack.MsgOptionBlocks(blocks...),
 		)
@@ -152,6 +166,11 @@ func startHTTPServer(api *slack.Client) {
 }
 
 func postDailySchedule(api *slack.Client, token string) error {
+	channelID, err := scheduleChannelID()
+	if err != nil {
+		return err
+	}
+
 	scheduleDay, err := scheduleDayForPost()
 	if err != nil {
 		return err
@@ -179,7 +198,7 @@ func postDailySchedule(api *slack.Client, token string) error {
 	}
 
 	postedChannel, timestamp, err := api.PostMessage(
-		"C0AP09MEL9Z",
+		channelID,
 		slack.MsgOptionText(renderedText, false),
 		slack.MsgOptionBlocks(blocks...),
 	)
