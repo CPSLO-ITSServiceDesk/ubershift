@@ -39,5 +39,9 @@ create index if not exists autoshift_shift_claims_message_index
 alter table public.autoshift_schedule_messages enable row level security;
 alter table public.autoshift_shift_claims enable row level security;
 
--- The Vercel server uses SUPABASE_SERVICE_ROLE_KEY, which bypasses RLS.
--- Do not expose that key in the browser.
+-- The Vercel server uses a Supabase secret/service-role key, which bypasses
+-- RLS. Do not expose that key in the browser.
+-- Table privileges are separate from RLS. Give only the server operations
+-- AutoShift needs to store, read, and redraw claim-enabled schedule posts.
+grant select, insert, update on public.autoshift_schedule_messages to service_role;
+grant select, insert on public.autoshift_shift_claims to service_role;
