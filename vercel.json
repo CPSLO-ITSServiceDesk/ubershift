@@ -13,6 +13,10 @@
   ],
   "rewrites": [
     {
+      "source": "/api/slack-interactions",
+      "destination": "/api?action=slack-interactions"
+    },
+    {
       "source": "/",
       "destination": "/api"
     }

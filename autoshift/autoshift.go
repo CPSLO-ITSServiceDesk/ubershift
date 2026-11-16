@@ -100,7 +100,11 @@ func dailyOpenShiftID(line string) string {
 		return "daily-open-shift:" + line
 	}
 
-	date := time.Now().In(pacific).Format("2006-01-02")
+	return dailyOpenShiftIDForDay(line, time.Now().In(pacific))
+}
+
+func dailyOpenShiftIDForDay(line string, day time.Time) string {
+	date := day.Format("2006-01-02")
 	return "daily-open-shift:" + date + ":" + line
 }
 

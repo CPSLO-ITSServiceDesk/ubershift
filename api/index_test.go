@@ -1,6 +1,10 @@
 package handler
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -45,5 +49,26 @@ func TestAutoPostSlotIsDueAtEightPacificAcrossDaylightSaving(t *testing.T) {
 				t.Errorf("autoPostSlotIsDue(%v, %q) = %t, want %t", test.now, test.slot, got, test.want)
 			}
 		})
+	}
+}
+
+func TestSlackSignatureValid(t *testing.T) {
+	t.Setenv("SLACK_SIGNING_SECRET", "test-signing-secret")
+	now := time.Date(2026, time.November, 16, 8, 0, 0, 0, time.UTC)
+	timestamp := strconv.FormatInt(now.Unix(), 10)
+	body := []byte("payload=%7B%7D")
+	base := "v0:" + timestamp + ":" + string(body)
+	mac := hmac.New(sha256.New, []byte("test-signing-secret"))
+	_, _ = mac.Write([]byte(base))
+	signature := "v0=" + hex.EncodeToString(mac.Sum(nil))
+
+	if !slackSignatureValid(timestamp, signature, body, now) {
+		t.Fatal("expected valid Slack signature")
+	}
+	if slackSignatureValid(timestamp, "v0=wrong", body, now) {
+		t.Fatal("expected invalid signature to be rejected")
+	}
+	if slackSignatureValid("1", signature, body, now) {
+		t.Fatal("expected stale timestamp to be rejected")
 	}
 }

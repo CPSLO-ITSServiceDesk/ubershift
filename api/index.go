@@ -1,16 +1,24 @@
 package handler
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	autoshift "shift-coverage-bot/autoshift"
+
+	"github.com/slack-go/slack"
 )
 
 func writeAPIError(w http.ResponseWriter, status int, message string) {
@@ -128,7 +136,23 @@ func postHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := autoshift.PostDashboardSchedule(r.FormValue("text"), r.FormValue("channel")); err != nil {
+	pacific, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "Could not load the Pacific time zone.")
+		return
+	}
+	scheduleDay, err := time.ParseInLocation("2006-01-02", r.FormValue("date"), pacific)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "Date must use YYYY-MM-DD.")
+		return
+	}
+	post := autoshift.PostDashboardSchedule
+	if autoshift.VercelShiftClaimsConfigured() {
+		post = func(text, destination string) error {
+			return autoshift.PostDashboardScheduleWithClaims(text, destination, scheduleDay)
+		}
+	}
+	if err := post(r.FormValue("text"), r.FormValue("channel")); err != nil {
 		log.Printf("post dashboard schedule: %v", err)
 		writeAPIError(w, http.StatusBadGateway, "Schedule post failed. Check the Slack environment variables and Runtime Logs.")
 		return
@@ -136,6 +160,125 @@ func postHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"message": "Schedule posted to Slack."})
+}
+
+func slackSignatureValid(headerTimestamp, signature string, body []byte, now time.Time) bool {
+	secret := os.Getenv("SLACK_SIGNING_SECRET")
+	if secret == "" || !strings.HasPrefix(signature, "v0=") {
+		return false
+	}
+	unixTimestamp, err := strconv.ParseInt(headerTimestamp, 10, 64)
+	if err != nil || now.Sub(time.Unix(unixTimestamp, 0)).Abs() > 5*time.Minute {
+		return false
+	}
+	base := "v0:" + headerTimestamp + ":" + string(body)
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(base))
+	want := "v0=" + hex.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(want), []byte(signature))
+}
+
+func writeSlackViewError(w http.ResponseWriter, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"response_action": "errors",
+		"errors": map[string]string{
+			"portion_claim_end": message,
+		},
+	})
+}
+
+// slackInteractionsHandler handles Slack Block Kit claim buttons over HTTPS.
+// Unlike Socket Mode, this works in Vercel Functions and persists claims in
+// Supabase. It never assigns or changes Teams shifts.
+func slackInteractionsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if !slackSignatureValid(r.Header.Get("X-Slack-Request-Timestamp"), r.Header.Get("X-Slack-Signature"), body, time.Now()) {
+		http.Error(w, "invalid Slack signature", http.StatusUnauthorized)
+		return
+	}
+	form, err := url.ParseQuery(string(body))
+	if err != nil || form.Get("payload") == "" {
+		http.Error(w, "missing Slack payload", http.StatusBadRequest)
+		return
+	}
+	var callback slack.InteractionCallback
+	if err := json.Unmarshal([]byte(form.Get("payload")), &callback); err != nil {
+		http.Error(w, "invalid Slack payload", http.StatusBadRequest)
+		return
+	}
+	if !autoshift.VercelShiftClaimsConfigured() {
+		writeSlackViewError(w, "Shift claims are not configured yet.")
+		return
+	}
+
+	api := slack.New(os.Getenv("SLACK_BOT_TOKEN"))
+	switch callback.Type {
+	case slack.InteractionTypeBlockActions:
+		for _, action := range callback.ActionCallback.BlockActions {
+			if action.ActionID != "claim_daily_open_shift" {
+				continue
+			}
+			modal, err := autoshift.DashboardClaimModal(action.Value, callback.Channel.ID, callback.Message.Timestamp)
+			if err != nil {
+				log.Printf("build Vercel claim modal: %v", err)
+				http.Error(w, "invalid claim action", http.StatusBadRequest)
+				return
+			}
+			if _, err := api.OpenView(callback.TriggerID, modal); err != nil {
+				log.Printf("open Vercel claim modal: %v", err)
+				http.Error(w, "could not open claim form", http.StatusBadGateway)
+				return
+			}
+			break
+		}
+		w.WriteHeader(http.StatusOK)
+		return
+
+	case slack.InteractionTypeViewSubmission:
+		if callback.View.CallbackID != "claim_open_shift_portion" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		claim, messageRef, err := autoshift.DashboardClaimFromView(callback)
+		if err != nil {
+			writeSlackViewError(w, err.Error())
+			return
+		}
+		message, err := autoshift.LoadDashboardScheduleMessage(r.Context(), messageRef.ChannelID, messageRef.MessageTS)
+		if err != nil {
+			log.Printf("load Vercel claim schedule: %v", err)
+			writeSlackViewError(w, "This schedule is no longer available. Please ask an admin to repost it.")
+			return
+		}
+		saved, err := autoshift.SaveDashboardShiftClaim(r.Context(), message, claim)
+		if err != nil {
+			log.Printf("save Vercel shift claim: %v", err)
+			writeSlackViewError(w, "Could not save the claim. Please try again.")
+			return
+		}
+		if !saved {
+			writeSlackViewError(w, "That time was just claimed. Choose another range.")
+			return
+		}
+		if err := autoshift.UpdateDashboardScheduleClaims(r.Context(), message); err != nil {
+			log.Printf("redraw Vercel schedule after claim: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"response_action": "clear"})
+		return
+	default:
+		w.WriteHeader(http.StatusOK)
+	}
 }
 
 // autoPostSlotIsDue keeps the Vercel Cron configuration in UTC while the
@@ -207,7 +350,13 @@ func autoPostHandler(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadGateway, "Could not generate the automatic schedule.")
 		return
 	}
-	if err := autoshift.PostDashboardSchedule(scheduleText, "work"); err != nil {
+	post := autoshift.PostDashboardSchedule
+	if autoshift.VercelShiftClaimsConfigured() {
+		post = func(text, destination string) error {
+			return autoshift.PostDashboardScheduleWithClaims(text, destination, scheduleDay)
+		}
+	}
+	if err := post(scheduleText, "work"); err != nil {
 		log.Printf("post automatic schedule: %v", err)
 		writeAPIError(w, http.StatusBadGateway, "Could not post the automatic schedule.")
 		return
@@ -222,6 +371,9 @@ func autoPostHandler(w http.ResponseWriter, r *http.Request) {
 // are added.
 func Handler(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Query().Get("action") {
+	case "slack-interactions":
+		slackInteractionsHandler(w, r)
+		return
 	case "auto-post":
 		autoPostHandler(w, r)
 		return

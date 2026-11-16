@@ -24,6 +24,8 @@ type portionClaimRequest struct {
 	FirstName   string `json:"first_name"`
 	Start       string `json:"start"`
 	End         string `json:"end"`
+	ChannelID   string `json:"channel_id,omitempty"`
+	MessageTS   string `json:"message_ts,omitempty"`
 }
 
 type claimableOpenShift struct {
@@ -48,7 +50,7 @@ func dailyScheduleBlocksWithPortionClaims(scheduleText string, claimsDB *sql.DB)
 			continue
 		}
 
-		requestID := dailyOpenShiftID(line)
+		requestID := dailyOpenShiftIDForDay(line, day)
 		firstName, start, end, parsed := parseOpenShiftLine(line, day)
 		if claimsDB != nil && parsed {
 			claims, err := loadPortionClaims(claimsDB, requestID)
