@@ -300,6 +300,7 @@ func BuildDailyScheduleTextForDay(token string, scheduleDay time.Time) (string, 
 		)
 	}
 
+	hasServiceDeskShift := false
 	for _, shift := range shifts {
 		if shift.SchedulingGroupID != os.Getenv("MS_SERVICE_DESK_GROUP_ID") {
 			continue
@@ -308,6 +309,7 @@ func BuildDailyScheduleTextForDay(token string, scheduleDay time.Time) (string, 
 		if shift.SharedShift == nil {
 			continue
 		}
+		hasServiceDeskShift = true
 
 		msUser, err := getMicrosoftUser(token, shift.UserID)
 		if err != nil {
@@ -346,6 +348,9 @@ func BuildDailyScheduleTextForDay(token string, scheduleDay time.Time) (string, 
 			pacific,
 		)
 	}
+	if !hasServiceDeskShift {
+		return noWorkScheduleText(scheduleDay), nil
+	}
 
 	if !isZoomCoverageDay(scheduleDay) {
 		return scheduleText, nil
@@ -380,6 +385,10 @@ func BuildDailyScheduleTextForDay(token string, scheduleDay time.Time) (string, 
 		}
 	}
 	return scheduleText, nil
+}
+
+func noWorkScheduleText(scheduleDay time.Time) string {
+	return fmt.Sprintf("*%s's Schedule*\n\n_No work today._\n", scheduleDay.Weekday())
 }
 
 func formatServiceDeskAvailability(

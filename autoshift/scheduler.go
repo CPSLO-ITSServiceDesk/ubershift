@@ -62,7 +62,7 @@ func scheduleDayAt(now time.Time, loc *time.Location) time.Time {
 }
 
 func schedulePostTimeAt(now time.Time, loc *time.Location) time.Time {
-	nextRun := scheduleDayAt(now, loc).Add(7*time.Hour + 30*time.Minute)
+	nextRun := scheduleDayAt(now, loc).Add(8 * time.Hour)
 	if now.After(nextRun) {
 		nextRun = nextRun.AddDate(0, 0, 1)
 	}
@@ -84,7 +84,7 @@ func startDailyScheduler(api *slack.Client, token string) {
 		timer := time.NewTimer(wait_duration) // starts a countdown
 		defer timer.Stop()                    // timer.C
 		<-timer.C                             // pauses execution until signal arrives
-		fmt.Println("It's 7:30 AM Pacific! Time to post today's schedule.")
+		fmt.Println("It's 8:00 AM Pacific! Time to post today's schedule.")
 		err = postDailySchedule(api, token)
 		if err != nil {
 			fmt.Println("Failed to post daily schedule:", err)

@@ -1,6 +1,16 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
+  "crons": [
+    {
+      "path": "/api?action=auto-post&slot=15",
+      "schedule": "0 15 * * 1-5"
+    },
+    {
+      "path": "/api?action=auto-post&slot=16",
+      "schedule": "0 16 * * 1-5"
+    }
+  ],
   "rewrites": [
     {
       "source": "/",

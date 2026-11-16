@@ -18,18 +18,18 @@ func TestSchedulePostTimeAtSkipsWeekend(t *testing.T) {
 	}{
 		{
 			name: "Friday after posting time schedules Monday",
-			now:  time.Date(2026, 10, 23, 8, 0, 0, 0, loc),
-			want: time.Date(2026, 10, 26, 7, 30, 0, 0, loc),
+			now:  time.Date(2026, 10, 23, 8, 1, 0, 0, loc),
+			want: time.Date(2026, 10, 26, 8, 0, 0, 0, loc),
 		},
 		{
 			name: "Saturday schedules Monday",
 			now:  time.Date(2026, 10, 24, 9, 0, 0, 0, loc),
-			want: time.Date(2026, 10, 26, 7, 30, 0, 0, loc),
+			want: time.Date(2026, 10, 26, 8, 0, 0, 0, loc),
 		},
 		{
 			name: "weekday before posting time schedules today",
 			now:  time.Date(2026, 10, 26, 7, 0, 0, 0, loc),
-			want: time.Date(2026, 10, 26, 7, 30, 0, 0, loc),
+			want: time.Date(2026, 10, 26, 8, 0, 0, 0, loc),
 		},
 	}
 
@@ -73,5 +73,17 @@ func TestScheduleDayForPostAtAcceptsOnlyWeekdays(t *testing.T) {
 
 	if _, err := scheduleDayForPostAt(now, "2026-10-31", loc); err == nil {
 		t.Error("expected Saturday to be rejected")
+	}
+}
+
+func TestNoWorkScheduleText(t *testing.T) {
+	loc, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := time.Date(2026, time.October, 26, 0, 0, 0, 0, loc)
+	want := "*Monday's Schedule*\n\n_No work today._\n"
+	if got := noWorkScheduleText(day); got != want {
+		t.Errorf("noWorkScheduleText() = %q, want %q", got, want)
 	}
 }
