@@ -292,9 +292,11 @@ func getSlackUserEmail(api *slack.Client, slackUserID string) (string, error) {
 // get Microsoft user from Cal Poly email from Slack
 // user, err := getMicrosoftUser(token, email)
 func getMicrosoftUser(token string, identifier string) (MicrosoftUser, error) {
-	url := "https://graph.microsoft.com/v1.0/users/" + identifier
+	// AutoShift needs only the employee's ID and display name for schedules.
+	// Keep the Graph response limited to those two fields.
+	endpoint := "https://graph.microsoft.com/v1.0/users/" + url.PathEscape(identifier) + "?$select=id,displayName"
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest("GET", endpoint, nil)
 	if err != nil {
 		return MicrosoftUser{}, err
 	}
