@@ -59,6 +59,41 @@ func scheduleChannelID() (string, error) {
 	return channelID, nil
 }
 
+// PostDashboardSchedule sends an administrator-reviewed schedule draft to the
+// requested Slack destination. It intentionally does not alter Teams shifts.
+func PostDashboardSchedule(scheduleText, destination string) error {
+	if strings.TrimSpace(scheduleText) == "" {
+		return fmt.Errorf("schedule text is empty")
+	}
+
+	var channelEnv string
+	switch destination {
+	case "test":
+		channelEnv = "SLACK_TEST_CHANNEL_ID"
+	case "work":
+		channelEnv = "SLACK_SCHEDULE_CHANNEL_ID"
+	default:
+		return fmt.Errorf("invalid Slack destination")
+	}
+
+	channelID := os.Getenv(channelEnv)
+	if channelID == "" {
+		return fmt.Errorf("%s is not set", channelEnv)
+	}
+
+	botToken := os.Getenv("SLACK_BOT_TOKEN")
+	if botToken == "" {
+		return fmt.Errorf("SLACK_BOT_TOKEN is not set")
+	}
+
+	api := slack.New(botToken)
+	if _, _, err := api.PostMessage(channelID, slack.MsgOptionText(scheduleText, false)); err != nil {
+		return fmt.Errorf("post schedule to Slack: %w", err)
+	}
+
+	return nil
+}
+
 func dailyOpenShiftID(line string) string {
 	pacific, err := time.LoadLocation("America/Los_Angeles")
 	if err != nil {
