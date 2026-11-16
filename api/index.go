@@ -54,6 +54,20 @@ func environmentConfigured(names ...string) bool {
 	return true
 }
 
+// automaticPostDestination selects where the scheduled weekday post is sent.
+// It defaults to the work channel so existing deployments remain unchanged.
+// Set UBERSHIFT_AUTO_POST_DESTINATION=test in Vercel to safely test automation.
+func automaticPostDestination() (string, error) {
+	destination := strings.TrimSpace(os.Getenv("UBERSHIFT_AUTO_POST_DESTINATION"))
+	if destination == "" {
+		return "work", nil
+	}
+	if destination != "work" && destination != "test" {
+		return "", fmt.Errorf("UBERSHIFT_AUTO_POST_DESTINATION must be work or test")
+	}
+	return destination, nil
+}
+
 func serviceStatusHTML() string {
 	services := []struct {
 		name         string
@@ -356,7 +370,13 @@ func autoPostHandler(w http.ResponseWriter, r *http.Request) {
 			return autoshift.PostDashboardScheduleWithClaims(text, destination, scheduleDay)
 		}
 	}
-	if err := post(scheduleText, "work"); err != nil {
+	destination, err := automaticPostDestination()
+	if err != nil {
+		log.Printf("configure automatic post: %v", err)
+		writeAPIError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	if err := post(scheduleText, destination); err != nil {
 		log.Printf("post automatic schedule: %v", err)
 		writeAPIError(w, http.StatusBadGateway, "Could not post the automatic schedule.")
 		return

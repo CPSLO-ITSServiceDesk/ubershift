@@ -52,6 +52,36 @@ func TestAutoPostSlotIsDueAtEightPacificAcrossDaylightSaving(t *testing.T) {
 	}
 }
 
+func TestAutomaticPostDestination(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string
+		valid bool
+	}{
+		{name: "defaults to work", want: "work", valid: true},
+		{name: "supports test channel", value: "test", want: "test", valid: true},
+		{name: "supports work channel", value: "work", want: "work", valid: true},
+		{name: "rejects unknown destination", value: "other", valid: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("UBERSHIFT_AUTO_POST_DESTINATION", test.value)
+			got, err := automaticPostDestination()
+			if test.valid && err != nil {
+				t.Fatalf("automaticPostDestination() returned error: %v", err)
+			}
+			if !test.valid && err == nil {
+				t.Fatal("automaticPostDestination() returned nil error")
+			}
+			if test.valid && got != test.want {
+				t.Errorf("automaticPostDestination() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestSlackSignatureValid(t *testing.T) {
 	t.Setenv("SLACK_SIGNING_SECRET", "test-signing-secret")
 	now := time.Date(2026, time.November, 16, 8, 0, 0, 0, time.UTC)
