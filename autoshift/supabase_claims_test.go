@@ -6,6 +6,7 @@ import (
 )
 
 func TestSupabaseServerKeyPrefersCurrentSecretKey(t *testing.T) {
+	t.Setenv(autoshiftSupabaseKeyVar, "")
 	t.Setenv(ubershiftSupabaseKeyVar, "")
 	t.Setenv(supabaseServiceRoleKeyVar, "legacy-service-role-key")
 	t.Setenv(supabaseSecretKeyVar, "sb_secret_current-key")
@@ -16,6 +17,7 @@ func TestSupabaseServerKeyPrefersCurrentSecretKey(t *testing.T) {
 }
 
 func TestSupabaseServerKeyFallsBackToLegacyServiceRoleKey(t *testing.T) {
+	t.Setenv(autoshiftSupabaseKeyVar, "")
 	t.Setenv(ubershiftSupabaseKeyVar, "")
 	t.Setenv(supabaseSecretKeyVar, "")
 	t.Setenv(supabaseServiceRoleKeyVar, "legacy-service-role-key")
@@ -26,7 +28,8 @@ func TestSupabaseServerKeyFallsBackToLegacyServiceRoleKey(t *testing.T) {
 }
 
 func TestSupabaseServerKeyPrefersAutoShiftDedicatedSecret(t *testing.T) {
-	t.Setenv(ubershiftSupabaseKeyVar, "sb_secret_autoshift-key")
+	t.Setenv(autoshiftSupabaseKeyVar, "sb_secret_autoshift-key")
+	t.Setenv(ubershiftSupabaseKeyVar, "")
 	t.Setenv(supabaseSecretKeyVar, "sk_live_vercel-connector-key")
 	t.Setenv(supabaseServiceRoleKeyVar, "legacy-service-role-key")
 
@@ -36,6 +39,7 @@ func TestSupabaseServerKeyPrefersAutoShiftDedicatedSecret(t *testing.T) {
 }
 
 func TestSupabaseServerKeyIgnoresVercelConnectorCredential(t *testing.T) {
+	t.Setenv(autoshiftSupabaseKeyVar, "")
 	t.Setenv(ubershiftSupabaseKeyVar, "")
 	t.Setenv(supabaseSecretKeyVar, "sk_live_vercel-connector-key")
 	t.Setenv(supabaseServiceRoleKeyVar, "legacy-service-role-key")
