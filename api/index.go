@@ -5,10 +5,36 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	autoshift "shift-coverage-bot/autoshift"
 )
+
+func writeAPIError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+func missingPreviewEnvironment() []string {
+	required := []string{
+		"MS_CLIENT_ID",
+		"MS_TENANT_ID",
+		"MS_CLIENT_SECRET",
+		"MS_TEAM_ID",
+		"MS_SERVICE_DESK_GROUP_ID",
+	}
+
+	var missing []string
+	for _, name := range required {
+		if os.Getenv(name) == "" {
+			missing = append(missing, name)
+		}
+	}
+	return missing
+}
 
 func previewHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -16,26 +42,33 @@ func previewHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if missing := missingPreviewEnvironment(); len(missing) > 0 {
+		message := "Preview is not configured. Add these Vercel environment variables: " + strings.Join(missing, ", ")
+		log.Print(message)
+		writeAPIError(w, http.StatusServiceUnavailable, message)
+		return
+	}
 
 	pacific, err := time.LoadLocation("America/Los_Angeles")
 	if err != nil {
-		http.Error(w, "load Pacific timezone", http.StatusInternalServerError)
+		writeAPIError(w, http.StatusInternalServerError, "Could not load the Pacific time zone.")
 		return
 	}
 	date, err := time.ParseInLocation("2006-01-02", r.FormValue("date"), pacific)
 	if err != nil {
-		http.Error(w, "date must use YYYY-MM-DD", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, "Date must use YYYY-MM-DD.")
 		return
 	}
 	token, err := autoshift.GetMicrosoftToken()
 	if err != nil {
-		http.Error(w, "Microsoft authentication failed", http.StatusBadGateway)
+		log.Printf("authenticate Microsoft preview: %v", err)
+		writeAPIError(w, http.StatusBadGateway, "Microsoft authentication failed. Check the Vercel environment variables and Microsoft app permissions.")
 		return
 	}
 	text, err := autoshift.BuildDailyScheduleTextForDay(token, date)
 	if err != nil {
 		log.Printf("generate schedule preview: %v", err)
-		http.Error(w, "schedule preview failed", http.StatusBadGateway)
+		writeAPIError(w, http.StatusBadGateway, "Could not generate the schedule. Check the Vercel Runtime Logs for the Microsoft Graph error.")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -51,7 +84,7 @@ func postHandler(w http.ResponseWriter, r *http.Request) {
 
 	if err := autoshift.PostDashboardSchedule(r.FormValue("text"), r.FormValue("channel")); err != nil {
 		log.Printf("post dashboard schedule: %v", err)
-		http.Error(w, "schedule post failed", http.StatusBadGateway)
+		writeAPIError(w, http.StatusBadGateway, "Schedule post failed. Check the Slack environment variables and Runtime Logs.")
 		return
 	}
 
