@@ -17,6 +17,7 @@ import (
 
 const (
 	supabaseURLVariable       = "SUPABASE_URL"
+	ubershiftSupabaseKeyVar   = "UBERSHIFT_SUPABASE_SECRET_KEY"
 	supabaseSecretKeyVar      = "SUPABASE_SECRET_KEY"
 	supabaseServiceRoleKeyVar = "SUPABASE_SERVICE_ROLE_KEY"
 	slackSigningSecretVar     = "SLACK_SIGNING_SECRET"
@@ -24,11 +25,18 @@ const (
 	shiftClaimsTableName      = "autoshift_shift_claims"
 )
 
-// supabaseServerKey prefers Supabase's current secret-key name while retaining
-// compatibility with Vercel's linked legacy service-role variable.
+// supabaseServerKey first uses AutoShift's dedicated key. Vercel's Supabase
+// connector can reserve SUPABASE_SECRET_KEY for its own sk_live credential,
+// which is not a Supabase Data API secret key. The legacy service-role key is
+// retained as a fallback for existing deployments.
 func supabaseServerKey() string {
-	if key := os.Getenv(supabaseSecretKeyVar); key != "" {
+	if key := os.Getenv(ubershiftSupabaseKeyVar); key != "" {
 		return key
+	}
+	if key := os.Getenv(supabaseSecretKeyVar); key != "" {
+		if strings.HasPrefix(key, "sb_secret_") {
+			return key
+		}
 	}
 	return os.Getenv(supabaseServiceRoleKeyVar)
 }
@@ -58,7 +66,7 @@ func supabaseRequest(ctx context.Context, method, table string, query url.Values
 	baseURL := strings.TrimSuffix(os.Getenv(supabaseURLVariable), "/")
 	serviceKey := supabaseServerKey()
 	if baseURL == "" || serviceKey == "" {
-		return nil, 0, fmt.Errorf("%s and either %s or %s must be set", supabaseURLVariable, supabaseSecretKeyVar, supabaseServiceRoleKeyVar)
+		return nil, 0, fmt.Errorf("%s and either %s or %s must be set", supabaseURLVariable, ubershiftSupabaseKeyVar, supabaseServiceRoleKeyVar)
 	}
 
 	endpoint := baseURL + "/rest/v1/" + table
@@ -108,7 +116,7 @@ func PostDashboardScheduleWithClaims(scheduleText, destination string, scheduleD
 		return fmt.Errorf("schedule text is empty")
 	}
 	if !VercelShiftClaimsConfigured() {
-		return fmt.Errorf("Vercel claims require %s, either %s or %s, and %s", supabaseURLVariable, supabaseSecretKeyVar, supabaseServiceRoleKeyVar, slackSigningSecretVar)
+		return fmt.Errorf("Vercel claims require %s, either %s or %s, and %s", supabaseURLVariable, ubershiftSupabaseKeyVar, supabaseServiceRoleKeyVar, slackSigningSecretVar)
 	}
 
 	var channelEnv string
