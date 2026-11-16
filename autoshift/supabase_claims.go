@@ -50,6 +50,19 @@ func setSupabaseAuthHeaders(req *http.Request, key string) {
 	}
 }
 
+func supabaseRequestError(method, table string, status string, responseBody []byte) error {
+	detail := strings.TrimSpace(string(responseBody))
+	// Supabase error bodies describe request problems but never need to include
+	// credentials. Keep logs useful without allowing unexpectedly large output.
+	if len(detail) > 500 {
+		detail = detail[:500] + "..."
+	}
+	if detail == "" {
+		return fmt.Errorf("Supabase %s %s returned %s", method, table, status)
+	}
+	return fmt.Errorf("Supabase %s %s returned %s: %s", method, table, status, detail)
+}
+
 // VercelClaimsConfigured reports whether a serverless function can persist
 // claims outside Vercel's temporary filesystem.
 func VercelClaimsConfigured() bool {
@@ -104,7 +117,7 @@ func supabaseRequest(ctx context.Context, method, table string, query url.Values
 		return nil, response.StatusCode, fmt.Errorf("read Supabase response: %w", err)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return responseBody, response.StatusCode, fmt.Errorf("Supabase %s %s returned %s", method, table, response.Status)
+		return responseBody, response.StatusCode, supabaseRequestError(method, table, response.Status, responseBody)
 	}
 	return responseBody, response.StatusCode, nil
 }

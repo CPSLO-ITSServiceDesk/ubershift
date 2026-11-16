@@ -65,3 +65,10 @@ func TestSetSupabaseAuthHeadersSupportsLegacyServiceRoleKeys(t *testing.T) {
 		t.Errorf("Authorization = %q, want legacy bearer token", got)
 	}
 }
+
+func TestSupabaseRequestErrorIncludesSafeResponseDetail(t *testing.T) {
+	err := supabaseRequestError("POST", "autoshift_schedule_messages", "403 Forbidden", []byte(`{"message":"permission denied"}`))
+	if got, want := err.Error(), `Supabase POST autoshift_schedule_messages returned 403 Forbidden: {"message":"permission denied"}`; got != want {
+		t.Errorf("supabaseRequestError() = %q, want %q", got, want)
+	}
+}
