@@ -33,6 +33,15 @@ func supabaseServerKey() string {
 	return os.Getenv(supabaseServiceRoleKeyVar)
 }
 
+// setSupabaseAuthHeaders supports both current opaque sb_ keys and legacy
+// JWT-based service-role keys. Supabase requires current keys in apikey only.
+func setSupabaseAuthHeaders(req *http.Request, key string) {
+	req.Header.Set("apikey", key)
+	if !strings.HasPrefix(key, "sb_") {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+}
+
 // VercelClaimsConfigured reports whether a serverless function can persist
 // claims outside Vercel's temporary filesystem.
 func VercelClaimsConfigured() bool {
@@ -69,8 +78,7 @@ func supabaseRequest(ctx context.Context, method, table string, query url.Values
 	if err != nil {
 		return nil, 0, fmt.Errorf("create Supabase request: %w", err)
 	}
-	req.Header.Set("apikey", serviceKey)
-	req.Header.Set("Authorization", "Bearer "+serviceKey)
+	setSupabaseAuthHeaders(req, serviceKey)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
