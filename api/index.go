@@ -87,7 +87,7 @@ func serviceStatusHTML() string {
 		{
 			name:         "Weekday automation",
 			isConfigured: environmentConfigured("CRON_SECRET"),
-			description:  "Vercel Cron runs at 8:00 AM Pacific, Monday through Friday.",
+			description:  "Vercel Cron runs during the 7 AM Pacific hour, Monday through Friday, to post by 8 AM.",
 		},
 	}
 
@@ -296,8 +296,10 @@ func slackInteractionsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // autoPostSlotIsDue keeps the Vercel Cron configuration in UTC while the
-// scheduled post stays at 8:00 AM Pacific through daylight-saving changes.
-// Vercel invokes both possible UTC hours; exactly one matches 8 AM Pacific.
+// scheduled post runs during the 7 AM Pacific hour through daylight-saving
+// changes. On Vercel Hobby, this gives the platform up to an hour to deliver
+// the schedule before 8 AM. Vercel invokes both possible UTC hours; exactly
+// one matches 7 AM Pacific.
 func autoPostSlotIsDue(now time.Time, slot string) bool {
 	pacific, err := time.LoadLocation("America/Los_Angeles")
 	if err != nil {
@@ -307,7 +309,7 @@ func autoPostSlotIsDue(now time.Time, slot string) bool {
 	if local.Weekday() == time.Saturday || local.Weekday() == time.Sunday {
 		return false
 	}
-	target := time.Date(local.Year(), local.Month(), local.Day(), 8, 0, 0, 0, pacific)
+	target := time.Date(local.Year(), local.Month(), local.Day(), 7, 0, 0, 0, pacific)
 	return fmt.Sprintf("%02d", target.UTC().Hour()) == slot
 }
 
@@ -335,7 +337,7 @@ func autoPostHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if !autoPostSlotIsDue(time.Now(), r.URL.Query().Get("slot")) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"message": "Skipped: this UTC slot is not 8:00 AM Pacific today."})
+		_ = json.NewEncoder(w).Encode(map[string]string{"message": "Skipped: this UTC slot is not during the 7 AM Pacific hour today."})
 		return
 	}
 	if missing := missingPreviewEnvironment(); len(missing) > 0 {
@@ -427,5 +429,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 <section class="grid"><article class="panel" id="posting"><div class="panel-heading"><div><h2>Post a daily schedule</h2><p>Choose the date and Slack destination, then generate an editable preview.</p></div><button class="primary" id="preview-button" type="button">Generate preview</button></div><div class="section-label">Schedule details</div><div class="form-row"><label class="field"><span>Schedule date</span><input id="schedule-date" name="date" type="date" required></label><label class="field"><span>Post to</span><select id="schedule-channel" name="channel"><option value="test" selected>Test channel (safe)</option><option value="work">Work Schedule channel</option></select></label></div><div class="notice"><b>ⓘ</b><div><b>Preview before posting.</b><br>Generating a preview reads Teams data. A separate confirmation is required to post your edited draft to Slack.</div></div><div class="preview" id="schedule-preview" hidden><div class="section-label">Review and edit schedule</div><textarea id="schedule-text" aria-label="Editable schedule preview"></textarea><div class="preview-actions"><button class="primary" id="confirm-button" type="button" disabled>Confirm post to Test channel</button></div><p class="preview-status" id="preview-status"></p></div></article>
 <aside class="panel" id="claims"><div class="panel-heading"><div><h2>Scheduled posts</h2><p>Automatic schedule publishing.</p></div></div><div class="schedule-item"><div class="date-box"><small>Weekdays</small>8 AM</div><div class="item-copy"><b>Daily work schedule</b><span>Posts to the Work Schedule channel in Pacific time.</span></div><span class="tag">Active</span></div><div class="section-label">Recent activity</div><div class="schedule-item"><div class="date-box"><small>Status</small>✓</div><div class="item-copy"><b>Automatic posting configured</b><span>If Teams has no Service Desk shifts, Slack receives “No work today.”</span></div><span class="tag">Ready</span></div><p class="footer-note" id="settings">Automatic posting requires the Vercel Cron secret and Work Schedule channel ID.</p></aside></section></main></div><script>const dateInput=document.getElementById('schedule-date');const channelInput=document.getElementById('schedule-channel');const previewButton=document.getElementById('preview-button');const confirmButton=document.getElementById('confirm-button');const preview=document.getElementById('schedule-preview');const scheduleText=document.getElementById('schedule-text');const previewStatus=document.getElementById('preview-status');const today=new Date();dateInput.value=[today.getFullYear(),String(today.getMonth()+1).padStart(2,'0'),String(today.getDate()).padStart(2,'0')].join('-');function destinationLabel(){return channelInput.options[channelInput.selectedIndex].text}function syncConfirmButton(){confirmButton.textContent='Confirm post to '+destinationLabel()}channelInput.addEventListener('change',syncConfirmButton);previewButton.addEventListener('click',async()=>{if(!dateInput.value){return}previewButton.disabled=true;confirmButton.disabled=true;previewButton.textContent='Generating…';previewStatus.className='preview-status';previewStatus.textContent='Reading the Teams schedule…';preview.hidden=false;try{const response=await fetch('/api?action=preview',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({date:dateInput.value})});const payload=await response.json().catch(()=>({}));if(!response.ok){throw new Error(payload.error||'Could not generate the schedule preview.')}scheduleText.value=payload.text;confirmButton.disabled=false;previewStatus.textContent='Preview generated for '+dateInput.value+' · '+destinationLabel()+'. You can edit the text before posting.'}catch(error){scheduleText.value='';previewStatus.className='preview-status error';previewStatus.textContent=error.message}finally{previewButton.disabled=false;previewButton.textContent='Generate preview'}});confirmButton.addEventListener('click',async()=>{if(!scheduleText.value.trim()){return}if(!window.confirm('Post this edited schedule to '+destinationLabel()+'?')){return}confirmButton.disabled=true;confirmButton.textContent='Posting…';previewStatus.className='preview-status';previewStatus.textContent='Posting to Slack…';try{const response=await fetch('/api?action=post',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({date:dateInput.value,channel:channelInput.value,text:scheduleText.value})});const payload=await response.json().catch(()=>({}));if(!response.ok){throw new Error(payload.error||'Could not post the schedule.')}previewStatus.textContent='Posted to '+destinationLabel()+'.'}catch(error){previewStatus.className='preview-status error';previewStatus.textContent=error.message}finally{confirmButton.disabled=false;syncConfirmButton()}});</script></body></html>`
 	page = strings.ReplaceAll(page, "{{SERVICE_STATUS}}", serviceStatusHTML())
+	page = strings.ReplaceAll(page, "Weekdays at 8:00 AM Pacific.", "Weekdays during the 7 AM hour, posted by 8:00 AM Pacific.")
+	page = strings.ReplaceAll(page, "<small>Weekdays</small>8 AM", "<small>Weekdays</small>Before 8")
+	page = strings.ReplaceAll(page, "Posts to the Work Schedule channel in Pacific time.", "Runs during the 7 AM Pacific hour to post by 8 AM.")
 	fmt.Fprint(w, page)
 }

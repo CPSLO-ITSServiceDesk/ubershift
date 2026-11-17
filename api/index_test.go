@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func TestAutoPostSlotIsDueAtEightPacificAcrossDaylightSaving(t *testing.T) {
+func TestAutoPostSlotIsDueDuringSevenPacificAcrossDaylightSaving(t *testing.T) {
 	utc := time.UTC
 	tests := []struct {
 		name string
@@ -18,27 +18,27 @@ func TestAutoPostSlotIsDueAtEightPacificAcrossDaylightSaving(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "summer uses 15 UTC for 8 AM Pacific daylight time",
-			now:  time.Date(2026, time.July, 6, 15, 0, 0, 0, utc),
-			slot: "15",
+			name: "summer uses 14 UTC for 7 AM Pacific daylight time",
+			now:  time.Date(2026, time.July, 6, 14, 0, 0, 0, utc),
+			slot: "14",
 			want: true,
 		},
 		{
 			name: "summer skips the standard-time UTC slot",
-			now:  time.Date(2026, time.July, 6, 16, 0, 0, 0, utc),
-			slot: "16",
+			now:  time.Date(2026, time.July, 6, 15, 0, 0, 0, utc),
+			slot: "15",
 			want: false,
 		},
 		{
-			name: "winter uses 16 UTC for 8 AM Pacific standard time",
-			now:  time.Date(2026, time.December, 7, 16, 0, 0, 0, utc),
-			slot: "16",
+			name: "winter uses 15 UTC for 7 AM Pacific standard time",
+			now:  time.Date(2026, time.December, 7, 15, 0, 0, 0, utc),
+			slot: "15",
 			want: true,
 		},
 		{
 			name: "weekends never post",
-			now:  time.Date(2026, time.December, 6, 16, 0, 0, 0, utc),
-			slot: "16",
+			now:  time.Date(2026, time.December, 6, 15, 0, 0, 0, utc),
+			slot: "15",
 			want: false,
 		},
 	}

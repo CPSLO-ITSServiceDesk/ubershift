@@ -3,12 +3,12 @@
   "framework": null,
   "crons": [
     {
-      "path": "/api?action=auto-post&slot=15",
-      "schedule": "0 15 * * 1-5"
+      "path": "/api?action=auto-post&slot=14",
+      "schedule": "0 14 * * 1-5"
     },
     {
-      "path": "/api?action=auto-post&slot=16",
-      "schedule": "0 16 * * 1-5"
+      "path": "/api?action=auto-post&slot=15",
+      "schedule": "0 15 * * 1-5"
     }
   ],
   "rewrites": [
