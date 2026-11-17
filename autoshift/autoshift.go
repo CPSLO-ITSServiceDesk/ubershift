@@ -23,6 +23,54 @@ type ClaimStore struct {
 	claimed map[string]string // requestID -> userID
 }
 
+type microsoftUserResult struct {
+	userID string
+	user   MicrosoftUser
+	err    error
+}
+
+type microsoftUserLookup func(token string, identifier string) (MicrosoftUser, error)
+
+// fetchMicrosoftUsers looks up distinct employees concurrently. A small limit
+// keeps previews fast without overwhelming Microsoft Graph.
+func fetchMicrosoftUsers(token string, userIDs []string) (map[string]MicrosoftUser, error) {
+	return fetchMicrosoftUsersWithLookup(token, userIDs, getMicrosoftUser)
+}
+
+func fetchMicrosoftUsersWithLookup(token string, userIDs []string, lookup microsoftUserLookup) (map[string]MicrosoftUser, error) {
+	uniqueIDs := make(map[string]struct{})
+	for _, userID := range userIDs {
+		if userID != "" {
+			uniqueIDs[userID] = struct{}{}
+		}
+	}
+
+	users := make(map[string]MicrosoftUser, len(uniqueIDs))
+	if len(uniqueIDs) == 0 {
+		return users, nil
+	}
+
+	results := make(chan microsoftUserResult, len(uniqueIDs))
+	limit := make(chan struct{}, 6)
+	for userID := range uniqueIDs {
+		go func(id string) {
+			limit <- struct{}{}
+			user, err := lookup(token, id)
+			<-limit
+			results <- microsoftUserResult{userID: id, user: user, err: err}
+		}(userID)
+	}
+
+	for range uniqueIDs {
+		result := <-results
+		if result.err != nil {
+			return nil, result.err
+		}
+		users[result.userID] = result.user
+	}
+	return users, nil
+}
+
 var (
 	dailyOpenShiftClaims = NewClaimStore()
 	dailyClaimsDB        *sql.DB
@@ -304,6 +352,17 @@ func BuildDailyScheduleTextForDay(token string, scheduleDay time.Time) (string, 
 		)
 	}
 
+	var serviceDeskUserIDs []string
+	for _, shift := range shifts {
+		if shift.SchedulingGroupID == os.Getenv("MS_SERVICE_DESK_GROUP_ID") && shift.SharedShift != nil {
+			serviceDeskUserIDs = append(serviceDeskUserIDs, shift.UserID)
+		}
+	}
+	users, err := fetchMicrosoftUsers(token, serviceDeskUserIDs)
+	if err != nil {
+		return "", fmt.Errorf("look up Service Desk employees: %w", err)
+	}
+
 	hasServiceDeskShift := false
 	for _, shift := range shifts {
 		if shift.SchedulingGroupID != os.Getenv("MS_SERVICE_DESK_GROUP_ID") {
@@ -315,10 +374,7 @@ func BuildDailyScheduleTextForDay(token string, scheduleDay time.Time) (string, 
 		}
 		hasServiceDeskShift = true
 
-		msUser, err := getMicrosoftUser(token, shift.UserID)
-		if err != nil {
-			return "", err
-		}
+		msUser := users[shift.UserID]
 
 		start, err := parseShiftTime(shift.SharedShift.StartDateTime)
 		if err != nil {
@@ -376,7 +432,7 @@ func BuildDailyScheduleTextForDay(token string, scheduleDay time.Time) (string, 
 	zoomSlots := generateZoomSlots(scheduleDay)
 	assignedSlots := assignZoomSlots(zoomSlots, employees, previousZoomSlots)
 	for _, slot := range assignedSlots {
-		zoomLine, err := formatZoomSlot(token, slot)
+		zoomLine, err := formatZoomSlotWithUser(slot, users[slot.UserID])
 		if err != nil {
 			return "", err
 		}

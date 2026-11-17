@@ -390,18 +390,24 @@ func buildZoomHeader() string {
 }
 
 func formatZoomSlot(token string, slot ZoomShift) (string, error) {
+	if slot.UserID == "Unassigned" {
+		return formatZoomSlotWithUser(slot, MicrosoftUser{})
+	}
+	ms_user, err := getMicrosoftUser(token, slot.UserID)
+	if err != nil {
+		return "", err
+	}
+	return formatZoomSlotWithUser(slot, ms_user)
+}
+
+func formatZoomSlotWithUser(slot ZoomShift, msUser MicrosoftUser) (string, error) {
 	start := strings.TrimSuffix(slot.Start.Format("3:04"), ":00")
 	end := strings.TrimSuffix(slot.End.Format("3:04"), ":00")
 	if slot.UserID == "Unassigned" {
 		return fmt.Sprintf("%s-%s Unassigned", start, end), nil
 	}
 
-	ms_user, err := getMicrosoftUser(token, slot.UserID)
-	if err != nil {
-		return "", err
-	}
-
-	names := strings.Fields(ms_user.DisplayName)
+	names := strings.Fields(msUser.DisplayName)
 	if len(names) == 0 {
 		return "", fmt.Errorf("Microsoft user has no display name")
 	}
